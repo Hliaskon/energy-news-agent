@@ -128,6 +128,18 @@ KEYWORDS = [
     # Hydrogen & tech
     "πρασινο υδρογονο", "green hydrogen", "electrolyzer", "ηλεκτρολυτ",
     "fuel cell", "κυψελη καυσιμου", "power to x", "αποανθρακοποιηση"
+    
+   # Buildings / Efficiency (NEW block)
+    "εξοικονομηση", "ενεργειακη αναβαθμιση", "εξοικονομω", "energy efficiency",
+    "energy audit", "ενεργειακος ελεγχος", "esco", "epc", "m&v", "ipmvp",
+    "iso 50001", "bems", "ems", "bas", "building automation",
+    "commissioning", "retrocommissioning", "optimization",
+    "θερμικη μονωση", "θερμογεφυρα", "u-value", "u value", "building envelope",
+    "hvac", "hvac optimization", "heat pump", "αντλια θερμοτητας",
+    "led", "led lighting", "φωτισμος led",
+    "air sealing", "airtightness", "infiltration", "retrofit",
+    "vfd", "variable speed drive", "inverter drive", "ie3", "ie4",
+    "heat recovery", "waste heat",
 ]
 
 NEGATIVE = [
@@ -136,13 +148,42 @@ NEGATIVE = [
     "sports", "entertainment"
 ]
 
-WEIGHTS = {"pv": 3, "bess": 3, "wind": 2, "gas": 2, "policy": 1}
+WEIGHTS = {"pv": 1, "bess": 2, "wind": 5, "gas": 4, "policy": 5, "heatpump": 2}
 GROUPS = {
-    "pv": ["φωτοβολ", "φβ", "pv", "πανελ", "inverter", "net metering", "αυτοκαταναλωση", "zero feed in"],
+    "pv": ["φωτοβολ", "φβ", "pv", "πανελ", "inverter", "net metering", "αυτοκαταναλωση", "zero feed in","Net Billing","Virtual Net Billing"],
     "bess": ["μπαταρ", "battery", "bess", "soc", "state of charge", "round trip efficiency", "lfp", "nmc", "flow battery"],
     "wind": ["αιολικ", "wind", "ανεμογεννητρ", "turbine", "onshore wind", "offshore wind", "repowering", "wind farm"],
     "gas": ["φυσικο αεριο", "gas", "lng", "fsru", "αγωγος", "pipeline", "eastmed", "tap", "igb"],
     "policy": ["υπεν", "ypen", "ρααευ", "ρυθμιστικη αρχη", "ppa", "cfd", "fit", "auctions", "ets"]
+    "heatpump": ["heat pump", "αντλια θερμοτητας", "hp", "air‑to‑water", "geothermal heat pump"]
+
+"efficiency": [
+        # General / programs
+        "εξοικονομηση", "ενεργειακη αναβαθμιση", "εξοικονομω",
+        "energy efficiency", "efficient",
+        "energy audit", "ενεργειακος ελεγχος", "audit",
+        "m&v", "measurement and verification", "ipmvp",
+        "esco", "epc", "iso 50001",
+
+        # Controls & systems
+        "bems", "ems", "bas", "building automation",
+        "commissioning", "retrocommissioning", "optimization",
+        "smart thermostat", "θερμοστατης", "smart thermostats",
+
+        # Industrial
+        "vfd", "variable speed drive", "inverter drive", "αντιστροφεας",
+        "ie3", "ie4", "υψηλης αποδοσης κινητηρας",
+        "heat recovery", "ανακτηση θερμοτητας",
+        "waste heat", "ανακτηση αποβλητης θερμοτητας",
+
+        # Envelope & hvac
+        "θερμικη μονωση", "μονωση", "θερμογεφυρα", "θερμογέφυρες",
+        "u-value", "u value", "building envelope", "κελυφος",
+        "hvac optimization", "hvac", "heat pump", "αντλια θερμοτητας",
+        "air sealing", "airtightness", "infiltration", "retrofit",
+        "led", "led lighting", "φωτισμος led", "υψηλης αποδοσης φωτισμος",
+    ]
+
 }
 
 def is_energy_title(title: str) -> bool:
