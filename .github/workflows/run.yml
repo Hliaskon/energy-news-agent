@@ -21,7 +21,7 @@ jobs:
 
     - name: Install requirements
       run: |
-        pip install requests beautifulsoup4
+        pip install -r requirements.txt
 
     - name: Run script
       env:
@@ -29,3 +29,13 @@ jobs:
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
       run: python energy_news.py
+
+
+
+    - name: Upload PPTX artifact
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: energy-news-report
+        path: energy_news_report.pptx
+      
