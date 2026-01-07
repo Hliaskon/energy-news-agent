@@ -1,5 +1,7 @@
-requests
-beautifulsoup4
-python-pptx
-python-dateutil
+requests~=2.32
+beautifulsoup4~=4.12
+lxml~=4.9
+python-dateutil~=2.9
+tzdata~=2024.1
+
 
