@@ -70,6 +70,43 @@ SITES = [
     "https://ypen.gov.gr/category/anakoinoseis/",
     "https://www.admie.gr/en/news",
     "https://www.raae.gr/anakoinoseis/"
+
+
+    
+    # --- Energy efficiency heavy sources (GR/EU/Intl) ---
+
+    # Greece / GR-focused EE
+    "https://exoikonomo2025.gov.gr/",                               # Official Exoikonomo portal [1](https://exoikonomo2025.gov.gr/)
+    "https://www.ot.gr/category/green/eksoikonomisi/",              # OT - Exoikonomisi section [2](https://www.ot.gr/category/green/eksoikonomisi/)
+    "https://www.skai.gr/tags/eksoikonomisi-energeias",             # SKAI EE tag [3](https://www.skai.gr/tags/eksoikonomisi-energeias)
+    "https://www.insider.gr/epiheiriseis/367163/exoikonomisi-energeias-poia-programmata-pairnoyn-paratasi",  # Insider feature [4](https://www.insider.gr/epiheiriseis/367163/exoikonomisi-energeias-poia-programmata-pairnoyn-paratasi)
+    "https://www.newmoney.gr/roh/palmos-oikonomias/energeia/exikonomisi-energias-pia-programmata-piran-paratasi-oles-i-imerominies/",  # Newmoney recap [5](https://www.newmoney.gr/roh/palmos-oikonomias/energeia/exikonomisi-energias-pia-programmata-piran-paratasi-oles-i-imerominies/)
+    "https://greekreporter.com/2025/12/17/aging-homes-funding-gaps-greece-energy-efficiency-risks/",         # GreekReporter analysis [6](https://greekreporter.com/2025/12/17/aging-homes-funding-gaps-greece-energy-efficiency-risks/)
+    "https://www.dnews.gr/eidhseis/news-in-english/537235/greece-unveils-ambitious-roadmap-to-cut-energy-use-in-buildings-by-2030",    # DNews roadmap [7](https://www.dnews.gr/eidhseis/news-in-english/537235/greece-unveils-ambitious-roadmap-to-cut-energy-use-in-buildings-by-2030)
+    "https://en.protothema.gr/2025/01/19/four-e1-billion-programs-to-kick-start-energy-efficiency-upgrades-in-2025/",                  # ProtoThema EN [8](https://en.protothema.gr/2025/01/19/four-e1-billion-programs-to-kick-start-energy-efficiency-upgrades-in-2025/)
+    "https://www.tovima.com/society/greece-launches-energy-efficiency-programs/",                            # ToVima EN summary [9](https://www.tovima.com/society/greece-launches-energy-efficiency-programs/)
+    "https://www.topics.gr/diafora/eksoikonomhsh-energeias/",                                               # Topics.gr aggregator [10](https://www.topics.gr/diafora/eksoikonomhsh-energeias/)
+
+    # EU / Institutions / Knowledge hubs
+    "https://energy.ec.europa.eu/news/energy-efficiency-new-impetus-reduce-energy-consumption-2025-05-21_en", # DG ENER news [11](https://energy.ec.europa.eu/news/energy-efficiency-new-impetus-reduce-energy-consumption-2025-05-21_en)
+    "https://energy.ec.europa.eu/news/focus-reaching-eus-energy-efficiency-target-2025-07-15_en",             # DG ENER focus [12](https://energy.ec.europa.eu/news/focus-reaching-eus-energy-efficiency-target-2025-07-15_en)
+    "https://cinea.ec.europa.eu/news-events/news/life-shows-path-energy-efficiency-c4e-forum-2025-06-06_en",  # CINEA LIFE/C4E [13](https://cinea.ec.europa.eu/news-events/news/life-shows-path-energy-efficiency-c4e-forum-2025-06-06_en)
+    "https://cinea.ec.europa.eu/index_en",                                                                     # CINEA hub [14](https://cinea.ec.europa.eu/index_en)
+    "https://build-up.ec.europa.eu/en/news-and-events/news/greeces-programmes-sustainable-heating-and-energy-efficiency",               # BUILD UP Greece EE [15](https://build-up.ec.europa.eu/en/news-and-events/news/greeces-programmes-sustainable-heating-and-energy-efficiency)
+    "https://build-up.ec.europa.eu/en/resources-and-tools/publications/energy-efficiency-2024-ieas-annual-analysis-global-energy",      # BUILD UP | IEA EE 2024 [16](https://build-up.ec.europa.eu/en/resources-and-tools/publications/energy-efficiency-2024-ieas-annual-analysis-global-energy)
+    "https://www.bpie.eu/news/",                                                                              # BPIE news stream [17](https://www.bpie.eu/news/)
+
+    # International EE analytics
+    "https://www.iea.org/news/global-progress-on-energy-efficiency-picks-up-in-2025",                         # IEA EE 2025 update [18](https://www.iea.org/news/global-progress-on-energy-efficiency-picks-up-in-2025)
+    "https://www.power-technology.com/news/global-energy-efficiency-progress-2025-iea/",                      # Coverage of IEA EE 2025 [19](https://www.power-technology.com/news/global-energy-efficiency-progress-2025-iea/)
+    "https://www.aceee.org/news",                                                                             # ACEEE news/blogs [20](https://www.aceee.org/news)
+    "https://www.eceee.org/all-news/news/",                                                                   # eceee news feed [21](https://www.eceee.org/all-news/news/news-2025/us-scorecard-energy-efficiency-upgrades-help-struggling-families-but-most-states-lagging/)
+
+    # Standards / HVAC (useful efficiency context)
+    "https://www.ashrae.org/about/news/2024/ashrae-s-new-edition-of-residential-energy-performance-standard-sets-bold-ghg-reduction-and-ieq-targets",  # ASHRAE 90.2-2024 [22](https://www.ashrae.org/about/news/2024/ashrae-s-new-edition-of-residential-energy-performance-standard-sets-bold-ghg-reduction-and-ieq-targets)
+    "https://www.facilitiesdive.com/news/ashrae-updates-standard-100-energy-efficiency-existing-buildings-decarbonization/704922/",                    # ASHRAE 100-2024 [23](https://www.facilitiesdive.com/news/ashrae-updates-standard-100-energy-efficiency-existing-buildings-decarbonization/704922/)
+
+    
 ]
 
 # --------------------------------
@@ -127,7 +164,7 @@ KEYWORDS = [
 
     # Hydrogen & tech
     "πρασινο υδρογονο", "green hydrogen", "electrolyzer", "ηλεκτρολυτ",
-    "fuel cell", "κυψελη καυσιμου", "power to x", "αποανθρακοποιηση"
+    "fuel cell", "κυψελη καυσιμου", "power to x", "αποανθρακοποιηση",
     
    # Buildings / Efficiency (NEW block)
     "εξοικονομηση", "ενεργειακη αναβαθμιση", "εξοικονομω", "energy efficiency",
