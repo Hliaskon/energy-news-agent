@@ -1,9 +1,9 @@
 
-name: Run Energy News Agent
+name: Run Energy News Agent (HTML Email)
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # Κάθε μέρα 08:00 Ελλάδας (06:00 UTC)
+    - cron: "0 6 * * *"   # Every day 08:00 Greece (06:00 UTC)
   workflow_dispatch:
 
 jobs:
@@ -11,34 +11,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.11"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    - name: Upgrade pip
-      run: python -m pip install --upgrade pip
+      - name: Upgrade pip tooling
+        run: python -m pip install --upgrade pip setuptools wheel
 
-    - name: Install requirements
-      run: |
-        pip install -r requirements.txt
+      - name: (Optional) Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
-    - name: Run script
-      env:
-        EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
-        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-        EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
-        SMTP_SERVER: ${{ secrets.SMTP_SERVER }}   # προαιρετικό (π.χ. smtp.gmail.com)
-        SMTP_PORT: ${{ secrets.SMTP_PORT }}       # προαιρετικό (π.χ. 587)
-        SEND_EMPTY: ${{ secrets.SEND_EMPTY }}     # "true" ή "false"
-      run: python energy_news.py
+      - name: Install requirements
+        run: pip install -r requirements.txt
 
-    - name: Upload PPTX artifact
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: energy-news-report
-        path: energy_news_report.pptx
+      - name: Run Energy News (send HTML email)
+        env:
+          EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}  # Gmail App Password recommended
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          EMAIL_CC: ${{ secrets.EMAIL_CC }}              # optional
+          EMAIL_BCC: ${{ secrets.EMAIL_BCC }}            # optional
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}        # e.g., smtp.gmail.com
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}            # e.g., 587
+          SEND_EMPTY: ${{ secrets.SEND_EMPTY }}          # "true" or "false"
+        run: python energy_news.py
