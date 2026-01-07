@@ -8,25 +8,29 @@ import unicodedata
 from urllib.parse import urljoin
 from typing import List, Tuple, Dict
 
+# HTTP & parsing
 import requests
+from requests.adapters import HTTPAdapter
+try:
+    from urllib3.util.retry import Retry
+except Exception:
+    Retry = None
+
 from bs4 import BeautifulSoup
+
+# Email
 import smtplib
-from email.mime.application import MIMEApplication
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.headerregistry import Address
+from email.utils import formatdate, make_msgid
 
-# PowerPoint
-from pptx import Presentation
-from pptx.util import Pt
-from pptx.enum.text import PP_ALIGN
-from pptx.dml.color import RGBColor
-
-# Ημερομηνίες/Ώρες
+# Dates
 from dateutil import parser as dateparser
 from zoneinfo import ZoneInfo  # stdlib (Python ≥3.9)
 
 # --------------------------------
-# ΡΥΘΜΙΣΕΙΣ / ΠΗΓΕΣ
+# Sources
 # --------------------------------
 SITES = [
     # ---- Core ελληνικά ενεργειακά sites ----
@@ -69,12 +73,12 @@ SITES = [
 ]
 
 # --------------------------------
-# Κανονικοποίηση κειμένου
+# Text normalization
 # --------------------------------
 ATHENS_TZ = ZoneInfo("Europe/Athens")
 
 def normalize(text: str) -> str:
-    """Lowercase + αφαίρεση ελληνικών τόνων/διακριτικών."""
+    """Lowercase + remove Greek accents/diacritics."""
     if not text:
         return ""
     t = text.lower()
@@ -85,43 +89,43 @@ def normalize(text: str) -> str:
 # Keywords / Negative / Scoring
 # --------------------------------
 KEYWORDS = [
-    # Γενική ενέργεια & αγορά
+    # General energy & market
     "ενεργεια", "ενεργειακη αγορα", "ενεργειακο κοστος", "κιλοβατωρα", "kwh", "mwh",
     "τιμολογια ρευματος", "προμηθευτες ρευματος", "χονδρεμπορικη", "χρηματιστηριο ενεργειας",
     "dam", "day ahead",
 
-    # Δίκτυα
+    # Networks
     "ηλεκτρ", "δικτυο μεταφορας", "δικτυο διανομης", "αδμηε", "δεδδηε",
     "διασυνδεση", "interconnector", "ευσταθεια δικτυου", "smart grid", "smart meters",
 
-    # Φωτοβολταϊκά / Ηλιακή
+    # PV
     "φωτοβολ", "φβ", "pv", "πανελ", "modules", "inverter", "μετατροπ", "string", "array",
     "net metering", "αυτοκαταναλωση", "zero feed in",
 
-    # Αιολικά
+    # Wind
     "αιολικ", "wind", "ανεμογεννητρ", "turbine", "onshore wind", "offshore wind",
     "repowering", "wind farm",
 
-    # Αποθήκευση
+    # Storage
     "μπαταρ", "battery", "bess", "soc", "state of charge", "round trip efficiency",
     "li ion", "lfp", "nmc", "flow battery", "αντλησιοταμιευση", "pumped storage",
 
-    # Υδροηλεκτρικά
+    # Hydro
     "υδροηλεκτρ", "ταμιευτηρ", "francis", "pelton", "υδροηλεκτρικη ισχυς", "υδατινοι ποροι",
 
-    # Φυσικό αέριο & υδρογονάνθρακες
+    # Gas & hydrocarbons
     "φυσικο αεριο", "gas", "lng", "fsru", "αγωγος", "pipeline",
     "eastmed", "tap", "igb", "upstream", "exploration", "κοιτασμα", "πετρελ", "διυλιστ",
 
-    # Θέρμανση / Κτίρια / Αποδοτικότητα
+    # Buildings / Efficiency
     "εξοικονομηση", "ενεργειακη αναβαθμιση", "heat pump", "αντλια θερμοτητας",
     "district heating", "τηλεθερμανση", "ενεργειακη κλαση", "θερμικη μονωση",
 
-    # Ρύθμιση / Πολιτική / Αγορά
+    # Policy / Market design
     "υπεν", "ypen", "ρααευ", "ρυθμιστικη αρχη", "δημοπρασιες απε", "auctions",
     "fit", "cfd", "ppa", "ets",
 
-    # Υδρογόνο & νέα τεχνολογία
+    # Hydrogen & tech
     "πρασινο υδρογονο", "green hydrogen", "electrolyzer", "ηλεκτρολυτ",
     "fuel cell", "κυψελη καυσιμου", "power to x", "αποανθρακοποιηση"
 ]
@@ -164,6 +168,30 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36"
 }
 
+# Prefer lxml if available; fallback to stdlib parser
+_BS_PARSER = "lxml"
+try:
+    BeautifulSoup("<html></html>", _BS_PARSER)
+except Exception:
+    _BS_PARSER = "html.parser"
+
+_SESSION = None
+def _get_session() -> requests.Session:
+    global _SESSION
+    if _SESSION is None:
+        s = requests.Session()
+        if Retry is not None:
+            retry = Retry(
+                total=3, connect=3, read=3,
+                backoff_factor=0.5,
+                status_forcelist=(429, 500, 502, 503, 504),
+                allowed_methods=frozenset(["GET", "HEAD"]),
+            )
+            s.mount("http://", HTTPAdapter(max_retries=retry))
+            s.mount("https://", HTTPAdapter(max_retries=retry))
+        _SESSION = s
+    return _SESSION
+
 def absolutize(base: str, href: str) -> str:
     try:
         return urljoin(base, href)
@@ -171,7 +199,7 @@ def absolutize(base: str, href: str) -> str:
         return href
 
 def is_probably_article_text(text: str) -> bool:
-    """Φιλτράρει πολύ μικρά/άσχετα κείμενα (π.χ. 'Read more', 'Share')."""
+    """Filter out very short/irrelevant link texts."""
     t = normalize(text)
     if len(t) < 8:
         return False
@@ -181,12 +209,12 @@ def is_probably_article_text(text: str) -> bool:
     return True
 
 def scrape_site(url: str, timeout: int = 12) -> List[Tuple[str, str]]:
-    """Επιστρέφει λίστα (title, link) από ένα site."""
+    """Return list (title, link) from a site."""
     results: List[Tuple[str, str]] = []
     try:
-        r = requests.get(url, headers=HEADERS, timeout=timeout)
+        r = _get_session().get(url, headers=HEADERS, timeout=timeout)
         r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
+        soup = BeautifulSoup(r.text, _BS_PARSER)
         for a in soup.find_all("a", href=True):
             title = a.get_text(strip=True)
             href = a["href"]
@@ -213,10 +241,10 @@ def scrape_site(url: str, timeout: int = 12) -> List[Tuple[str, str]]:
         return []
 
 # --------------------------------
-# Ημερομηνία/Ώρα Δημοσίευσης
+# Dates
 # --------------------------------
 def try_parse_dt(value: str):
-    """Parse οποιαδήποτε ημερομηνία → Europe/Athens. Αν δεν έχει tz → υποθέτουμε UTC."""
+    """Parse any date → Europe/Athens. If missing tz → assume UTC."""
     if not value:
         return None
     try:
@@ -230,12 +258,13 @@ def try_parse_dt(value: str):
         return None
 
 def extract_published_dt_from_article(html: str):
-    soup = BeautifulSoup(html, "html.parser")
-
+    soup = BeautifulSoup(html, _BS_PARSER)
     candidates = []
+
     # 1) Meta tags
     for attr in ("property", "name"):
-        for key in ("article:published_time", "og:updated_time", "pubdate", "publishdate", "timestamp", "dc.date", "dc.date.issued", "date"):
+        for key in ("article:published_time", "og:updated_time", "pubdate", "publishdate",
+                    "timestamp", "dc.date", "dc.date.issued", "date"):
             tag = soup.find("meta", {attr: key})
             if tag and tag.get("content"):
                 candidates.append(tag.get("content"))
@@ -266,22 +295,21 @@ def extract_published_dt_from_article(html: str):
     return None
 
 def fetch_article_published_dt(url: str, timeout: int = 10):
-    """Κάνει 1 επιπλέον fetch στη σελίδα άρθρου για να εξάγει ημερομηνία/ώρα."""
+    """Extra fetch on article page to extract publish date/time."""
     try:
-        r = requests.get(url, headers=HEADERS, timeout=timeout)
+        r = _get_session().get(url, headers=HEADERS, timeout=timeout)
         r.raise_for_status()
         return extract_published_dt_from_article(r.text)
     except Exception:
         return None
 
 # --------------------------------
-# Φίλτρο & Ταξινόμηση (με ημερομηνία)
+# Filter & sort
 # --------------------------------
 def filter_energy_news(news_list: List[Tuple[str, str]]) -> List[Tuple[str, str, datetime.datetime]]:
     """
-    Επιστρέφει [(title, link, published_dt_athens)],
-    ταξινομημένα κατά published_dt (desc) και score (desc),
-    με dedup και όριο στα extra fetch ανά site για απόδοση.
+    Return [(title, link, published_dt_athens)], sorted by published_dt (desc) and score (desc),
+    with dedup and a limit on extra per-article fetches per site for performance.
     """
     seen_links = set()
     tmp: List[Tuple[str, str]] = []
@@ -296,11 +324,11 @@ def filter_energy_news(news_list: List[Tuple[str, str]]) -> List[Tuple[str, str,
             seen_links.add(ln)
             tmp.append((title, link))
 
-    # ταξινόμηση πρώτα κατά score
+    # sort by score first
     tmp.sort(key=lambda x: score_title(x[0]), reverse=True)
 
-    # εμπλουτισμός με published_dt για τα πιο σχετικά
-    MAX_ARTICLES_FETCH_DT = 12  # top-N ανά site για ημερομηνία/ώρα
+    # enrich with published_dt for the most relevant
+    MAX_ARTICLES_FETCH_DT = 12
     enriched: List[Tuple[str, str, datetime.datetime]] = []
 
     for i, (title, link) in enumerate(tmp):
@@ -311,7 +339,6 @@ def filter_energy_news(news_list: List[Tuple[str, str]]) -> List[Tuple[str, str,
 
     def sort_key(item):
         title, link, dt = item
-        # None → πολύ παλιά, score βοηθά στη σειρά
         base_dt = dt or datetime.datetime.min.replace(tzinfo=ZoneInfo("UTC"))
         return (base_dt, score_title(title))
 
@@ -319,7 +346,7 @@ def filter_energy_news(news_list: List[Tuple[str, str]]) -> List[Tuple[str, str,
     return enriched
 
 # --------------------------------
-# Report (text για logs/email body)
+# Report builders (plain + HTML)
 # --------------------------------
 def fmt_dt(dt: datetime.datetime):
     return dt.strftime("%Y-%m-%d %H:%M") if dt else "—"
@@ -343,77 +370,105 @@ def build_text_report(news_dict: Dict[str, List[Tuple[str, str, datetime.datetim
                 lines.append("")
     return "\n".join(lines)
 
-# --------------------------------
-# Δημιουργία PowerPoint (.pptx)
-# --------------------------------
-def add_title_slide(prs: Presentation, title_text: str, subtitle_text: str) -> None:
-    slide = prs.slides.add_slide(prs.slide_layouts[0])  # Title
-    slide.shapes.title.text = title_text
-    slide.placeholders[1].text = subtitle_text
-
-def add_bullet_slide(prs: Presentation, heading: str, bullets: List[str]) -> None:
-    slide = prs.slides.add_slide(prs.slide_layouts[1])  # Title & Content
-    slide.shapes.title.text = heading
-    tf = slide.shapes.placeholders[1].text_frame
-    tf.clear()
-    for i, text in enumerate(bullets):
-        p = tf.add_paragraph() if i > 0 else tf.paragraphs[0]
-        p.text = text
-        p.level = 0
-
-def build_pptx(news_dict: Dict[str, List[Tuple[str, str, datetime.datetime]]], output_path: str):
-    prs = Presentation()
+def build_html_report(news_dict: Dict[str, List[Tuple[str, str, datetime.datetime]]]) -> str:
     today = datetime.datetime.now(tz=ATHENS_TZ).strftime("%d/%m/%Y %H:%M")
-    add_title_slide(prs, "Daily Energy News Report", f"Ημερομηνία/Ώρα: {today} (Europe/Athens)")
-
-    empty_total = True
+    style = """
+    body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color:#222; }
+    h1 { font-size: 20px; margin-bottom: 8px; }
+    .ts { color:#555; font-size: 12px; margin-bottom: 16px; }
+    .site { border-top:1px solid #eee; padding-top:12px; margin-top:12px; }
+    .item { margin: 8px 0; }
+    .score { display:inline-block; min-width:28px; background:#eef; color:#224; border:1px solid #ccd; border-radius:4px; padding:2px 6px; font-size:12px; margin-right:6px; }
+    .dt { color:#666; font-size:12px; margin-left:4px; }
+    a { color:#0366d6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .empty { color:#a33; font-style: italic; }
+    """
+    parts = [f"<h1>🔋 DAILY ENERGY NEWS REPORT</h1>",
+             f"<div class='ts'>Europe/Athens — {today}</div>"]
     for site, items in news_dict.items():
-        bullets = []
+        parts.append(f"<div class='site'><strong>SITE:</strong> {site}</div>")
         if not items:
-            bullets.append("❗ Δεν βρέθηκαν ενεργειακές ειδήσεις.")
+            parts.append("<div class='item empty'>❗ Δεν βρέθηκαν ενεργειακές ειδήσεις.</div>")
         else:
-            empty_total = False
-            for title, link, published_dt in items[:10]:  # top 10 ανά site
+            for title, link, published_dt in items:
                 score = score_title(title)
-                bullets.append(f"[{fmt_dt(published_dt)}] ({score}) {title}\n{link}")
-        add_bullet_slide(prs, site, bullets)
-
-    prs.save(output_path)
-    return output_path, empty_total
+                dt_s = fmt_dt(published_dt)
+                parts.append(
+                    f"<div class='item'><span class='score'>{score}</span>"
+                    f"<a href='{link}' target='_blank' rel='noopener noreferrer'>{title}</a>"
+                    f"<span class='dt'>[{dt_s}]</span></div>"
+                )
+    html = f"<!doctype html><html><head><meta charset='utf-8'><style>{style}</style></head><body>{''.join(parts)}</body></html>"
+    return html
 
 # --------------------------------
-# Email με συνημμένο PPTX
+# Email (HTML + plain fallback)
 # --------------------------------
-def send_email_with_attachment(subject: str, body_text: str, attachment_path: str) -> None:
+def send_email_html(subject: str, body_text: str, body_html: str) -> None:
     EMAIL_USERNAME = os.getenv("EMAIL_USERNAME")
     EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-    EMAIL_RECIPIENT = os.getenv("EMAIL_RECIPIENT")
+    EMAIL_RECIPIENT = os.getenv("EMAIL_RECIPIENT")  # comma-separated supported
+    EMAIL_CC = os.getenv("EMAIL_CC", "").strip()
+    EMAIL_BCC = os.getenv("EMAIL_BCC", "").strip()
     SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
     SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 
     if not EMAIL_USERNAME or not EMAIL_PASSWORD or not EMAIL_RECIPIENT:
-        raise RuntimeError("Λείπουν τα env vars: EMAIL_USERNAME / EMAIL_PASSWORD / EMAIL_RECIPIENT")
+        raise RuntimeError("Missing env vars: EMAIL_USERNAME / EMAIL_PASSWORD / EMAIL_RECIPIENT")
 
-    msg = MIMEMultipart()
-    msg["From"] = EMAIL_USERNAME
-    msg["To"] = EMAIL_RECIPIENT
+    to_list = [x.strip() for x in EMAIL_RECIPIENT.split(",") if x.strip()]
+    cc_list = [x.strip() for x in EMAIL_CC.split(",") if x.strip()]
+    bcc_list = [x.strip() for x in EMAIL_BCC.split(",") if x.strip()]
+    all_rcpts = to_list + cc_list + bcc_list
+    if not all_rcpts:
+        raise RuntimeError("EMAIL_RECIPIENT is empty.")
+
+    # MIME alternative (plain + HTML)
+    msg = MIMEMultipart("alternative")
+    try:
+        local, domain = EMAIL_USERNAME.split("@", 1)
+        msg["From"] = str(Address(display_name="Daily Energy News Agent", username=local, domain=domain))
+    except Exception:
+        msg["From"] = EMAIL_USERNAME
+    msg["To"] = ", ".join(to_list)
+    if cc_list:
+        msg["Cc"] = ", ".join(cc_list)
     msg["Subject"] = subject
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid()
 
-    # απλό κείμενο στο σώμα (μπορεί να γίνει HTML αν θες)
+    # Attach plain and HTML versions
     msg.attach(MIMEText(body_text, "plain", "utf-8"))
+    msg.attach(MIMEText(body_html, "html", "utf-8"))
 
-    # συνημμένο PPTX
-    with open(attachment_path, "rb") as f:
-        part = MIMEApplication(f.read(), Name=os.path.basename(attachment_path))
-    part['Content-Disposition'] = f'attachment; filename="{os.path.basename(attachment_path)}"'
-    msg.attach(part)
-
-    # SMTP
-    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-    server.starttls()
-    server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
-    server.sendmail(EMAIL_USERNAME, EMAIL_RECIPIENT, msg.as_string())
-    server.quit()
+    # SMTP with STARTTLS then SSL fallback
+    attempts = [("STARTTLS", SMTP_SERVER, SMTP_PORT), ("SSL", SMTP_SERVER, 465)]
+    last_exc = None
+    for mode, host, port in attempts:
+        for _try in range(2):
+            server = None
+            try:
+                if mode == "STARTTLS":
+                    server = smtplib.SMTP(host, port, timeout=20)
+                    server.ehlo()
+                    server.starttls()
+                    server.ehlo()
+                else:
+                    server = smtplib.SMTP_SSL(host, port, timeout=20)
+                server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+                server.sendmail(EMAIL_USERNAME, all_rcpts, msg.as_string())
+                return
+            except Exception as e:
+                last_exc = e
+                time.sleep(2)
+            finally:
+                try:
+                    if server is not None:
+                        server.quit()
+                except Exception:
+                    pass
+    raise RuntimeError(f"Failed to send email after retries: {last_exc}")
 
 # --------------------------------
 # MAIN
@@ -426,26 +481,22 @@ def main():
         raw = scrape_site(site)
         filt = filter_energy_news(raw)
         all_results[site] = filt
-        time.sleep(0.5)  # ευγένεια προς sites
+        time.sleep(0.5)  # politeness
 
-    # Text report (για logs/email body)
     text_report = build_text_report(all_results)
-    print(text_report)
+    html_report = build_html_report(all_results)
 
-    # PPTX
-    pptx_name = "energy_news_report.pptx"
-    pptx_path, empty_total = build_pptx(all_results, pptx_name)
-
-    # Στέλνουμε email (με επιλογή για empty)
     SEND_EMPTY = os.getenv("SEND_EMPTY", "false").lower() == "true"
+    empty_total = all(len(items) == 0 for items in all_results.values())
+
     if SEND_EMPTY or (not empty_total):
         try:
-            send_email_with_attachment("Daily Energy News Report (PPTX)", text_report, pptx_path)
-            print("📨 Email (με PPTX) εστάλη επιτυχώς!")
+            send_email_html("Daily Energy News Report (HTML)", text_report, html_report)
+            print("📨 Email (HTML) sent successfully!")
         except Exception as e:
             print(f"❌ Failed to send email: {e}", file=sys.stderr)
     else:
-        print("ℹ️ Καμία ενεργειακή είδηση — δεν στέλνω email (μπορείς να ενεργοποιήσεις SEND_EMPTY=true).")
+        print("ℹ️ No energy news found — not sending email (set SEND_EMPTY=true to force).")
 
 if __name__ == "__main__":
     main()
