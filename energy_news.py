@@ -148,7 +148,7 @@ NEGATIVE = [
     "sports", "entertainment"
 ]
 
-WEIGHTS = {"pv": 1, "bess": 2, "wind": 5, "gas": 4, "policy": 5, "heatpump": 2}
+WEIGHTS = {"pv": 1, "bess": 2, "wind": 5, "gas": 4, "policy": 5, "heatpump": 2, "efficiency":3}
 GROUPS = {
     "pv": ["φωτοβολ", "φβ", "pv", "πανελ", "inverter", "net metering", "αυτοκαταναλωση", "zero feed in","Net Billing","Virtual Net Billing"],
     "bess": ["μπαταρ", "battery", "bess", "soc", "state of charge", "round trip efficiency", "lfp", "nmc", "flow battery"],
