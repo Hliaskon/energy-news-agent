@@ -38,7 +38,7 @@ jobs:
 
     - name: Upload PPTX artifact
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: energy-news-report
         path: energy_news_report.pptx
