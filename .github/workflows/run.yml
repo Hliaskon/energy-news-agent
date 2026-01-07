@@ -1,0 +1,31 @@
+
+name: Run Energy News Agent
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # Κάθε μέρα 08:00 Ελλάδας (06:00 UTC)
+  workflow_dispatch:
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install requirements
+      run: |
+        pip install requests beautifulsoup4
+
+    - name: Run script
+      env:
+        EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+      run: python energy_news.py
