@@ -69,7 +69,7 @@ SITES = [
     # ---- Οργανισμοί / Αρχές ----
     "https://ypen.gov.gr/category/anakoinoseis/",
     "https://www.admie.gr/en/news",
-    "https://www.raae.gr/anakoinoseis/"
+    "https://www.raae.gr/anakoinoseis/",
 
 
     
