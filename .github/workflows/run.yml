@@ -3,7 +3,7 @@ name: Run Energy News Agent
 
 on:
   schedule:
-    - cron: "0 8 * * *"   # Κάθε μέρα 10:00 Ελλάδας (08:00 UTC)
+    - cron: "0 6 * * *"   # Κάθε μέρα 08:00 Ελλάδας (06:00 UTC)
   workflow_dispatch:
 
 jobs:
@@ -19,6 +19,9 @@ jobs:
       with:
         python-version: "3.11"
 
+    - name: Upgrade pip
+      run: python -m pip install --upgrade pip
+
     - name: Install requirements
       run: |
         pip install -r requirements.txt
@@ -28,9 +31,10 @@ jobs:
         EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+        SMTP_SERVER: ${{ secrets.SMTP_SERVER }}   # προαιρετικό (π.χ. smtp.gmail.com)
+        SMTP_PORT: ${{ secrets.SMTP_PORT }}       # προαιρετικό (π.χ. 587)
+        SEND_EMPTY: ${{ secrets.SEND_EMPTY }}     # "true" ή "false"
       run: python energy_news.py
-
-
 
     - name: Upload PPTX artifact
       if: always()
@@ -38,4 +42,3 @@ jobs:
       with:
         name: energy-news-report
         path: energy_news_report.pptx
-      
