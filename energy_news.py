@@ -191,8 +191,8 @@ GROUPS = {
     "bess": ["μπαταρ", "battery", "bess", "soc", "state of charge", "round trip efficiency", "lfp", "nmc", "flow battery"],
     "wind": ["αιολικ", "wind", "ανεμογεννητρ", "turbine", "onshore wind", "offshore wind", "repowering", "wind farm"],
     "gas": ["φυσικο αεριο", "gas", "lng", "fsru", "αγωγος", "pipeline", "eastmed", "tap", "igb"],
-    "policy": ["υπεν", "ypen", "ρααευ", "ρυθμιστικη αρχη", "ppa", "cfd", "fit", "auctions", "ets"]
-    "heatpump": ["heat pump", "αντλια θερμοτητας", "hp", "air‑to‑water", "geothermal heat pump"]
+    "policy": ["υπεν", "ypen", "ρααευ", "ρυθμιστικη αρχη", "ppa", "cfd", "fit", "auctions", "ets"],
+    "heatpump": ["heat pump", "αντλια θερμοτητας", "hp", "air‑to‑water", "geothermal heat pump"],
 
 "efficiency": [
         # General / programs
