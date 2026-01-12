@@ -49,6 +49,8 @@ SITES = [
     "https://ecotec.gr/category/energy/",
     "https://www.greenagenda.gr/category/energy/",
     "https://energynews.gr/",
+    "https://industry-news.gr/"
+    "https://www.businessdaily.gr/",
 
     # ---- Διεθνή sites που καλύπτουν Ελλάδα ----
     "https://greekreporter.com/greek-news/energy/",
@@ -58,6 +60,7 @@ SITES = [
     "https://www.bloomberg.com/energy",
     "https://www.spglobal.com/commodityinsights/en",
     "https://www.ft.com/stream/6d801c42-fd6a-4e71-af32-d398e90e9b5d",
+     "https://www.euronews.com/tag/energy",
 
     # ---- ΑΠΕ / Τεχνική ενημέρωση ----
     "https://www.pv-magazine.com/tag/greece/",
