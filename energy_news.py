@@ -49,8 +49,9 @@ SITES = [
     "https://ecotec.gr/category/energy/",
     "https://www.greenagenda.gr/category/energy/",
     "https://energynews.gr/",
-    "https://industry-news.gr/"
+    "https://industry-news.gr/",
     "https://www.businessdaily.gr/",
+    "https://www.worldenergynews.gr/",
 
     # ---- Διεθνή sites που καλύπτουν Ελλάδα ----
     "https://greekreporter.com/greek-news/energy/",
