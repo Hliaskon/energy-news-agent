@@ -53,6 +53,7 @@ SITES = [
     "https://www.businessdaily.gr/",
     "https://www.worldenergynews.gr/",
     "https://ypodomes.com/",
+    "https://www.financialreport.gr/",
 
     # ---- Διεθνή sites που καλύπτουν Ελλάδα ----
     "https://greekreporter.com",
