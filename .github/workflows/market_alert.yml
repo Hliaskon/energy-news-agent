@@ -1,0 +1,45 @@
+name: Greek Market Alert
+
+on:
+  schedule:
+    - cron: "30 7 * * 2"   # Tuesday  07:30 UTC = 09:30 EET / 10:30 EEST
+    - cron: "30 7 * * 5"   # Friday   07:30 UTC = 09:30 EET / 10:30 EEST
+  workflow_dispatch:
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system XML libs
+        run: sudo apt-get install -y python3-lxml
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install Python requirements
+        run: pip install -r requirements.txt
+
+      - name: Run market alert
+        env:
+          EMAIL_USERNAME:  ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD:  ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          EMAIL_CC:        ${{ secrets.EMAIL_CC }}
+          EMAIL_BCC:       ${{ secrets.EMAIL_BCC }}
+          SMTP_SERVER:     ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT:       ${{ secrets.SMTP_PORT }}
+        run: python market_alert.py
