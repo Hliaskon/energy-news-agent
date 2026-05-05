@@ -40,6 +40,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+              # ← ΝΕΟ: system lxml για ταχύτερο parsing (προσθές πριν το pip install)
+      - name: Install system XML libs
+        run: sudo apt-get install -y python3-lxml
+
+      - name: Install requirements
+        run: pip install -r requirements.txt
 
       - name: Run Energy News Agent
         env:
