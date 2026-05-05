@@ -1,25 +1,20 @@
 #!/usr/bin/env python3
 """
-energy_news.py  —  Daily Energy News Agent  v2
-Enerwave | HELLENiQ ENERGY — Energy Efficiency Division
-
-Changes from v1
-───────────────
-• CONFIG block at top — tune without editing logic
-• Scoring weights rebalanced for Enerwave EE focus
-  (efficiency 6 / heatpump 5 / solar_thermal 5 / chp_cogen 5 /
-   esco_epc 5 / eu_funding 5 / industrial_decarb 4  /  wind LOWERED to 2)
-• 5 new keyword + scoring groups: solar_thermal, chp_cogen, esco_epc,
-  eu_funding, industrial_decarb  — all core Enerwave service lines
-• MAX_AGE_DAYS  — articles older than N days automatically discarded
-• Parallel date enrichment via ThreadPoolExecutor (faster, larger pool)
-• Cross-site title deduplication (Jaccard similarity ≥ 0.65)
-• SKIP_SITES set — hard-paywalled / bot-blocked domains excluded cleanly
-• Report reorganised:
-    1. 🔝 Top Highlights  (best N across all sites)
-    2. Thematic sections  (EE / Solar / Funding / Industry / Storage / Gas)
-    — per-site breakdown removed (source shown inline on each item)
-• Email subject now includes article count and date
+energy_news.py  v2.0 — Enerwave-tuned Daily Energy News Aggregator
+────────────────────────────────────────────────────────────────────
+Changes vs v1:
+  • Topic-based HTML report (EE → ESCO → Solar Thermal → CHP → …)
+    instead of per-site listing — scan in seconds, not minutes
+  • TOP-N headline section at the top of the email
+  • Enerwave-weighted scoring: efficiency / esco / solar_th / funding = 5
+    (wind / pv demoted to 2 — not in Enerwave service portfolio)
+  • New keyword groups: solar_thermal, esco, chp, industrial, funding/ΕΣΠΑ
+  • ~18 new sites: ΕΣΠΑ portals, Greek associations (ΕΛΕΤΑΕΝ, HELAPCO,
+    IENE, ΔΕΗ, ΔΕΔΔΗΕ, Metlen), IEA-SHC, ESTIF, Euroheat, ΕΦΕΠΑΕ …
+  • MAX_AGE_DAYS filter: drops articles with a known date > 3 days old
+  • MAX_DT_FETCHES raised to 30 (more articles enriched with exact dates)
+  • Global cross-site deduplication (same story from N sites → kept once)
+  • Informative email subject: date + article count
 """
 
 import os
@@ -28,16 +23,17 @@ import time
 import json
 import datetime
 import unicodedata
-from urllib.parse import urljoin
-from typing import List, Tuple, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from urllib.parse import urljoin, urlparse
+from typing import Dict, List, Optional, Tuple
 
 import requests
 from requests.adapters import HTTPAdapter
+
 try:
     from urllib3.util.retry import Retry
 except Exception:
-    Retry = None
+    Retry = None  # type: ignore
 
 from bs4 import BeautifulSoup
 import smtplib
@@ -45,31 +41,25 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.headerregistry import Address
 from email.utils import formatdate, make_msgid
-
 from dateutil import parser as dateparser
 from zoneinfo import ZoneInfo
 
-# ══════════════════════════════════════════════════════════════════
-#  CONFIG  —  edit here, no changes needed elsewhere
-# ══════════════════════════════════════════════════════════════════
-ATHENS_TZ      = ZoneInfo("Europe/Athens")
-MAX_AGE_DAYS   = 5      # drop articles with known date older than N days (0 = keep all)
-MAX_DATE_FETCH = 50     # max articles enriched with a per-article date request
-MAX_TOP        = 15     # items shown in "Top Highlights" section
-DATE_WORKERS   = 10     # parallel threads for date enrichment
-SITE_TIMEOUT   = 12     # seconds — site scrape request
-DATE_TIMEOUT   = 8      # seconds — per-article date fetch
+# ══════════════════════════════════════════════════════════════
+#  CONFIG
+# ══════════════════════════════════════════════════════════════
+ATHENS_TZ       = ZoneInfo("Europe/Athens")
+MAX_AGE_DAYS    = 3          # drop articles with a known date older than this
+MAX_DT_FETCHES  = 30         # max extra HTTP GETs for date enrichment
+TOP_N           = 12         # items in the "Top Headlines" section
+SCRAPE_DELAY    = 0.4        # seconds between site requests (politeness)
+REQUEST_TIMEOUT = 12         # seconds per HTTP request
 
-# Hard-paywalled / bot-blocked — returns nothing useful, skip immediately
-SKIP_SITES: set = {
-    "https://www.bloomberg.com",
-}
-
-# ══════════════════════════════════════════════════════════════════
-#  SOURCES
-# ══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
+#  SITES
+# ══════════════════════════════════════════════════════════════
 SITES: List[str] = [
-    # ── Core Greek energy media ──────────────────────────────────
+
+    # ── Core Greek energy / economy ──────────────────────────────────
     "https://www.energypress.gr",
     "https://www.naftemporiki.gr",
     "https://www.ot.gr",
@@ -91,263 +81,329 @@ SITES: List[str] = [
     "https://ypodomes.com/",
     "https://www.financialreport.gr/",
     "https://energymag.gr/",
-    # ── International — Greece & Balkans ─────────────────────────
+
+    # ── Additional Greek energy sites (NEW) ──────────────────────────
+    "https://www.energia.gr/",                  # ειδήσεις ενέργειας
+    "https://www.enallaktiki.gr/",              # ΑΠΕ / εξοικονόμηση
+    "https://www.haee.gr/news/",                # Ελληνική Ένωση Εταιρειών Ενέργειας
+    "https://helapco.gr/news/",                 # Σύνδεσμος Εταιρειών Φ/Β
+    "https://www.eletaen.gr/",                  # ΕΛΕΤΑΕΝ — αιολικά
+    "https://www.iene.eu/",                     # Institute of Energy for SE Europe
+    "https://www.dei.gr/el/category/news/",     # ΔΕΗ — ανακοινώσεις
+    "https://www.hedno.gr/gr/press",            # ΔΕΔΔΗΕ — τύπος
+    "https://www.metlen.com/gr/news-media",     # Metlen (πρ. MYTILINEOS)
+
+    # ── ΕΣΠΑ / EU Funding portals (NEW) ─────────────────────────────
+    "https://www.espa.gr/el/pages/staticEspaNews.aspx",
+    "https://www.antagonistikotita.gr/anakoinoseis/",   # Ανταγωνιστικότητα 2021-27
+    "https://www.efepae.gr/front.aspx/news",             # ΕΦΕΠΑΕ
+    "https://www.mindev.gov.gr/category/deltia-typou/",  # Υπ. Ανάπτυξης
+    "https://www.pepattikis.gr/anakoinoseis/",           # ΠΕΠ Αττικής
+    "https://www.mou.gr/el/Pages/News.aspx",             # Μονάδα Οργάνωσης ΕΕ
+
+    # ── Solar thermal / industrial heat / CHP (NEW) ─────────────────
+    "https://www.solarthermalworld.org/news/",   # global ST news (AEE INTEC)
+    "https://www.iea-shc.org/news",              # IEA Solar Heating & Cooling
+    "https://estif.org/news/",                   # EU Solar Thermal Industry Fed.
+    "https://www.euroheat.org/news/",            # European Heat & Cooling assoc.
+
+    # ── ESCO / EE industry ───────────────────────────────────────────
+    "https://www.eceee.org/all-news/news/",
+    "https://www.aceee.org/news",
+    "https://www.bpie.eu/news/",
+
+    # ── Balkan / regional ────────────────────────────────────────────
     "https://greekreporter.com",
     "https://balkangreenenergynews.com",
     "https://energynews.oedigital.com",
-    "https://www.reuters.com",
-    "https://www.spglobal.com",
-    "https://www.ft.com",
-    "https://www.euronews.com",
-    # ── RES / Technical ──────────────────────────────────────────
-    "https://www.pv-magazine.com/tag/greece/",
-    "https://renewablesnow.com/topic/greece/",
+
+    # ── International ────────────────────────────────────────────────
     "https://www.euractiv.com/section/energy/",
     "https://www.euronews.com/tag/energy",
-    # ── Regulators / Authorities ─────────────────────────────────
+    "https://www.spglobal.com",
+    "https://www.ft.com",                        # headlines visible, body paywall
+
+    # ── RES specialty ────────────────────────────────────────────────
+    "https://www.pv-magazine.com/tag/greece/",
+    "https://renewablesnow.com/topic/greece/",
+
+    # ── Regulatory / Gov (GR) ────────────────────────────────────────
     "https://ypen.gov.gr/category/anakoinoseis/",
     "https://www.admie.gr/en/news",
     "https://www.raae.gr/anakoinoseis/",
-    # ── Energy Efficiency — Greece ───────────────────────────────
+
+    # ── EE programs (GR) ─────────────────────────────────────────────
     "https://exoikonomo2025.gov.gr/",
     "https://www.ot.gr/category/green/eksoikonomisi/",
     "https://www.skai.gr/tags/eksoikonomisi-energeias",
     "https://www.topics.gr/diafora/eksoikonomhsh-energeias/",
-    # ── Energy Efficiency — EU / International ───────────────────
-    "https://www.bpie.eu/news/",
-    "https://www.aceee.org/news",
-    "https://www.eceee.org/all-news/news/",
+
+    # ── EU institutions ───────────────────────────────────────────────
     "https://energy.ec.europa.eu/news_en",
-    "https://build-up.ec.europa.eu/en/",
-    "https://cinea.ec.europa.eu/news-events/news_en",
-    # ── Solar Thermal / CHP / Industrial EE  [new in v2] ─────────
-    "https://www.solarthermalworld.org/news/",
-    "https://www.iea.org/news",
+    "https://cinea.ec.europa.eu/index_en",
+    "https://build-up.ec.europa.eu/en/news-and-events",
+    "https://www.iea.org/topics/energy-efficiency",
+    "https://www.power-technology.com/category/energy-efficiency/",
     "https://www.facilitiesdive.com/",
-    "https://www.heatpumpingtechnologies.org/news/",
 ]
 
-# ══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 #  TEXT NORMALISATION
-# ══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 def normalize(text: str) -> str:
-    """Lowercase + strip Greek diacritics for accent-insensitive matching."""
+    """Lowercase + strip Greek diacritics."""
     if not text:
         return ""
     t = text.lower()
-    t = "".join(c for c in unicodedata.normalize("NFD", t)
-                if unicodedata.category(c) != "Mn")
-    return t
+    return "".join(
+        c for c in unicodedata.normalize("NFD", t)
+        if unicodedata.category(c) != "Mn"
+    )
 
-# ══════════════════════════════════════════════════════════════════
-#  KEYWORDS / GROUPS / WEIGHTS
-# ══════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════
+#  KEYWORDS  (normalized — no accents needed)
+# ══════════════════════════════════════════════════════════════
 KEYWORDS: List[str] = [
     # General energy / market
-    "ενεργεια", "ενεργειακη αγορα", "ενεργειακο κοστος", "kwh", "mwh",
-    "τιμολογια ρευματος", "χονδρεμπορικη", "χρηματιστηριο ενεργειας",
-    "dam", "day ahead",
-    # Grid / networks
-    "ηλεκτρ", "αδμηε", "δεδδηε", "διασυνδεση", "interconnector",
-    "smart grid", "smart meters",
+    "ενεργεια", "ενεργειακη αγορα", "ενεργειακο κοστος",
+    "kwh", "mwh", "τιμολογια ρευματος", "χονδρεμπορικη", "day ahead", "dam",
+    # Networks
+    "ηλεκτρ", "αδμηε", "δεδδηε", "διασυνδεση", "smart grid", "smart meter",
     # PV
-    "φωτοβολ", "φβ", "pv", "πανελ", "inverter", "net metering",
-    "αυτοκαταναλωση", "zero feed in", "net billing",
+    "φωτοβολ", "φβ", "pv", "net metering", "net billing",
+    "αυτοκαταναλωση", "zero feed in", "virtual net billing",
     # Wind
-    "αιολικ", "wind", "ανεμογεννητρ", "turbine",
-    "onshore wind", "offshore wind", "repowering",
+    "αιολικ", "wind", "ανεμογεννητρ", "turbine", "offshore wind", "repowering",
     # Storage
-    "μπαταρ", "battery", "bess", "soc", "lfp", "nmc",
-    "flow battery", "αντλησιοταμιευση", "pumped storage",
-    # Hydro
-    "υδροηλεκτρ",
-    # Gas / Hydrocarbons
+    "μπαταρ", "battery", "bess", "αντλησιοταμιευση", "pumped storage",
+    # Gas / oil
     "φυσικο αεριο", "gas", "lng", "fsru", "αγωγος", "pipeline",
-    "eastmed", "tap", "igb", "πετρελ", "κοιτασμα",
-    # Buildings / EE — residential & commercial
+    "eastmed", "tap", "κοιτασμα", "πετρελ", "διυλιστ",
+    # EE / Buildings
     "εξοικονομηση", "ενεργειακη αναβαθμιση", "εξοικονομω",
-    "energy efficiency", "ενεργειακη αποδοση",
-    "heat pump", "αντλια θερμοτητας",
-    "θερμικη μονωση", "u-value", "building envelope",
-    "hvac", "led", "bems", "retrofit",
-    "esco", "epc", "m&v", "ipmvp", "iso 50001",
-    # Solar Thermal / CHP  [new]
-    "solar thermal", "ηλιοθερμικ", "cst", "concentrating solar",
-    "παραβολικ κατοπτρ", "parabolic trough", "process heat",
-    "chp", "συμπαραγωγη", "cogeneration", "combined heat and power",
-    "τριπαραγωγη", "trigeneration", "orc", "organic rankine",
-    # ESCO / EPC  [new]
-    "energy performance contract", "ενεργειακη συμβαση",
-    "guaranteed savings", "εγγυημενη εξοικονομηση", "energy services",
-    # EU Funding  [new]
-    "innovation fund", "life program", "life clean energy",
-    "ταμειο ανακαμψης", "recovery fund", "rrf", "εσπα",
-    "horizon europe", "cbam", "κοινωνικο κλιματικο ταμειο",
-    "social climate fund", "accelerateeu", "accelerate eu",
-    # Industrial Decarbonisation  [new]
-    "αποανθρακοποιηση βιομηχανια", "industrial decarbonization",
-    "βιομηχανικη ενεργεια", "industrial energy",
-    "energy intensive industry", "net zero industry",
-    "clean industrial deal",
+    "energy efficiency", "efficient", "energy audit", "ενεργειακος ελεγχος",
+    "θερμικη μονωση", "μονωση", "u-value", "building envelope",
+    "hvac", "heat pump", "αντλια θερμοτητας", "led", "retrofit", "airtightness",
+    # ESCO / EPC / M&V
+    "esco", "epc", "energy performance contract", "energy service",
+    "m&v", "ipmvp", "iso 50001", "bems", "ems", "bas", "building automation",
+    "commissioning", "retrocommissioning",
+    # Industrial EE
+    "vfd", "variable speed drive", "inverter drive", "ie3", "ie4",
+    "heat recovery", "ανακτηση θερμοτητας", "waste heat",
+    "process heat", "βιομηχανικη ενεργεια", "compressed air", "πεπιεσμενος αερας",
+    # Solar thermal / CST
+    "solar thermal", "ηλιοθερμικ", "ηλιακη θερμοτητα",
+    "parabolic trough", "παραβολικα κατοπτρα", "cst", "concentrating solar",
+    "solar heat", "process steam", "ατμος παραγωγης",
+    "district heating", "τηλεθερμανση",
+    # CHP / Cogeneration
+    "chp", "cogeneration", "συμπαραγωγη", "τριπαραγωγη", "trigeneration",
     # Hydrogen
-    "πρασινο υδρογονο", "green hydrogen", "electrolyzer",
-    "fuel cell", "power to x",
-    # Policy / Market design
-    "υπεν", "ypen", "ρααευ", "ppa", "cfd", "fit", "auctions", "ets",
+    "πρασινο υδρογονο", "green hydrogen", "electrolyzer", "fuel cell",
+    "power to x", "αποανθρακοποιηση",
+    # Policy
+    "υπεν", "ypen", "ρααευ", "ppa", "cfd", "fit", "auctions", "ets", "cbam",
+    # ΕΣΠΑ / EU Funding
+    "εσπα", "espa", "ταμειο ανακαμψης", "recovery fund", "rrf",
+    "innovation fund", "if26", "life program", "life clean energy",
+    "horizon europe", "ευρωπαϊκα ταμεια", "επιχειρησιακο προγραμμα",
+    "ανταγωνιστικοτητα 2021", "αλλαζω συστημα θερμανσης", "εσπα ενεργεια",
 ]
 
 NEGATIVE: List[str] = [
     "αθλη", "πολιτισ", "ψυχαγωγ", "μαγειρ", "συνταγ", "μοδα",
-    "υγεια", "πανδημ", "κορονο", "τουρισ", "αυτοκινητ",
-    "sports", "entertainment",
+    "καιρος", "υγεια", "πανδημ", "κορονο", "τουρισ",
+    "sports", "entertainment", "ποδοσφαιρ",
 ]
 
-# Weights rebalanced for Enerwave EE / industrial focus
-WEIGHTS: dict = {
-    "efficiency":        6,   # ↑↑  core business
-    "heatpump":          5,   # ↑↑
-    "solar_thermal":     5,   # NEW — SUNBREWED / CST service line
-    "chp_cogen":         5,   # NEW — CHP / trigeneration service line
-    "esco_epc":          5,   # NEW — contractual EE models
-    "eu_funding":        5,   # NEW — funding / programme intelligence
-    "industrial_decarb": 4,   # NEW — target sector
-    "policy":            4,
-    "gas":               3,
-    "pv":                3,   # ↓  less direct for Enerwave
-    "bess":              3,
-    "wind":              2,   # ↓↓  not a core Enerwave service
+
+# ══════════════════════════════════════════════════════════════
+#  SCORING  —  Enerwave-weighted
+# ══════════════════════════════════════════════════════════════
+WEIGHTS: Dict[str, int] = {
+    "efficiency": 5,   # core business
+    "esco":       5,   # main contract model
+    "solar_th":   5,   # flagship technology (CST / industrial process heat)
+    "funding":    5,   # ΕΣΠΑ/EU funding drives project pipeline
+    "chp":        4,   # cogeneration projects
+    "industrial": 4,   # VFD, heat recovery, compressed air
+    "policy":     4,
+    "gas":        4,
+    "heatpump":   3,
+    "bess":       3,
+    "pv":         2,   # commoditised — low margin for Enerwave
+    "wind":       2,   # not in Enerwave service portfolio
 }
 
-GROUPS: dict = {
+GROUPS: Dict[str, List[str]] = {
     "efficiency": [
         "εξοικονομηση", "ενεργειακη αναβαθμιση", "εξοικονομω",
-        "energy efficiency", "ενεργειακη αποδοση", "efficient",
-        "energy audit", "ενεργειακος ελεγχος",
+        "energy efficiency", "efficient", "energy audit",
+        "ενεργειακος ελεγχος", "θερμικη μονωση", "μονωση",
+        "u-value", "building envelope", "hvac", "retrofit", "led",
         "bems", "ems", "bas", "building automation",
-        "commissioning", "retrocommissioning",
-        "θερμικη μονωση", "u-value", "building envelope",
-        "hvac", "hvac optimization", "air sealing", "airtightness",
-        "retrofit", "led", "led lighting", "vfd",
-        "variable speed drive", "ie3", "ie4",
-        "heat recovery", "waste heat",
+        "commissioning", "retrocommissioning", "iso 50001", "m&v", "ipmvp",
+    ],
+    "esco": [
+        "esco", "epc", "energy performance contract",
+        "energy service", "εξοικονομω μεσω παροχων",
+    ],
+    "solar_th": [
+        "solar thermal", "ηλιοθερμικ", "ηλιακη θερμοτητα",
+        "parabolic trough", "παραβολικα κατοπτρα", "cst",
+        "concentrating solar", "solar heat", "process steam",
+        "ατμος παραγωγης", "ηλιακο θερμικο",
+    ],
+    "chp": [
+        "chp", "cogeneration", "συμπαραγωγη",
+        "τριπαραγωγη", "trigeneration",
+    ],
+    "industrial": [
+        "vfd", "variable speed drive", "ie3", "ie4",
+        "heat recovery", "ανακτηση θερμοτητας", "waste heat",
+        "process heat", "βιομηχανικη ενεργεια",
+        "compressed air", "πεπιεσμενος αερας",
+        "district heating", "τηλεθερμανση",
     ],
     "heatpump": [
-        "heat pump", "αντλια θερμοτητας", "αντλιες θερμοτητας",
-        "air-to-water", "air to water", "geothermal heat pump",
-        "ground source", "district heating",
+        "heat pump", "αντλια θερμοτητας",
+        "air-to-water", "geothermal heat pump",
     ],
-    "solar_thermal": [
-        "solar thermal", "ηλιοθερμικ", "cst",
-        "concentrating solar", "παραβολικ κατοπτρ",
-        "parabolic trough", "process heat",
-        "θερμοτητα διεργασιας", "industrial heat",
-        "flat plate collector", "vacuum tube",
-        "ηλιακη θερμοτητα", "solar process heat",
-    ],
-    "chp_cogen": [
-        "chp", "συμπαραγωγη", "cogeneration",
-        "combined heat and power", "τριπαραγωγη",
-        "trigeneration", "orc", "organic rankine",
-        "micro-chp", "biomass chp",
-    ],
-    "esco_epc": [
-        "esco", "epc", "energy performance contract",
-        "ενεργειακη συμβαση", "guaranteed savings",
-        "εγγυημενη εξοικονομηση", "shared savings",
-        "energy services", "ενεργειακες υπηρεσιες",
-        "m&v", "measurement and verification", "ipmvp", "iso 50001",
-    ],
-    "eu_funding": [
-        "innovation fund", "life program", "life clean energy",
-        "ταμειο ανακαμψης", "recovery fund", "rrf", "εσπα",
-        "horizon europe", "cbam",
-        "κοινωνικο κλιματικο ταμειο", "social climate fund",
-        "accelerateeu", "accelerate eu",
-        "κρατικες ενισχυσεις", "state aid energy",
-    ],
-    "industrial_decarb": [
-        "αποανθρακοποιηση βιομηχανια", "industrial decarbonization",
-        "βιομηχανικη ενεργεια", "industrial energy",
-        "energy intensive industry", "net zero industry",
-        "clean industrial deal", "βιομηχανικη μεταβαση",
-        "deep renovation", "heavy industry",
+    "funding": [
+        "εσπα", "espa", "ταμειο ανακαμψης", "recovery fund", "rrf",
+        "innovation fund", "if26", "life program", "life clean energy",
+        "horizon europe", "ευρωπαϊκα ταμεια",
+        "ανταγωνιστικοτητα 2021", "αλλαζω συστημα θερμανσης",
+        "εξοικονομω 2025", "εσπα ενεργεια",
     ],
     "pv": [
-        "φωτοβολ", "φβ", "pv", "πανελ", "inverter",
-        "net metering", "αυτοκαταναλωση", "zero feed in",
-        "net billing", "virtual net billing",
+        "φωτοβολ", "φβ", "pv", "net metering", "net billing",
+        "αυτοκαταναλωση", "zero feed in", "virtual net billing",
     ],
     "bess": [
-        "μπαταρ", "battery", "bess", "soc", "state of charge",
-        "round trip efficiency", "lfp", "nmc", "flow battery",
-        "αντλησιοταμιευση", "pumped storage",
+        "μπαταρ", "battery", "bess",
+        "αντλησιοταμιευση", "pumped storage", "lfp",
     ],
     "wind": [
         "αιολικ", "wind", "ανεμογεννητρ", "turbine",
-        "onshore wind", "offshore wind", "repowering", "wind farm",
+        "offshore wind", "repowering",
     ],
     "gas": [
-        "φυσικο αεριο", "gas", "lng", "fsru", "αγωγος",
-        "pipeline", "eastmed", "tap", "igb",
-        "upstream", "exploration", "κοιτασμα", "πετρελ", "διυλιστ",
+        "φυσικο αεριο", "gas", "lng", "fsru",
+        "αγωγος", "pipeline", "eastmed",
     ],
     "policy": [
-        "υπεν", "ypen", "ρααευ", "ρυθμιστικη αρχη",
-        "auctions", "fit", "cfd", "ppa", "ets",
+        "υπεν", "ypen", "ρααευ", "ppa", "cfd",
+        "fit", "auctions", "ets", "cbam",
     ],
 }
 
-# Display order for thematic report sections
-THEMES: List[Tuple[str, List[str]]] = [
-    ("⚡ Εξοικονόμηση & Ενεργειακή Αναβάθμιση",   ["efficiency", "heatpump", "esco_epc"]),
-    ("☀️  Ηλιοθερμικά & Φωτοβολταϊκά",             ["solar_thermal", "pv"]),
-    ("💰 Χρηματοδοτήσεις & Πολιτική",               ["eu_funding", "policy"]),
-    ("🏭 Βιομηχανία & Συμπαραγωγή (CHP)",           ["chp_cogen", "industrial_decarb"]),
-    ("🔋 Αποθήκευση & Αιολικά",                      ["bess", "wind"]),
-    ("⛽ Αέριο, Πετρέλαιο & Αγορές",                ["gas"]),
-    ("🌐 Γενικά Ενεργειακά",                         []),  # catch-all
+# First matching key wins (most Enerwave-specific first)
+TOPIC_PRIORITY: List[str] = [
+    "esco", "solar_th", "chp", "industrial",
+    "efficiency", "funding", "heatpump",
+    "pv", "bess", "wind", "gas", "policy",
 ]
 
-# ── Helpers ────────────────────────────────────────────────────────
+# Display metadata per topic: (emoji, Greek label)
+TOPIC_META: Dict[str, Tuple[str, str]] = {
+    "efficiency": ("🏢", "Εξοικονόμηση Ενέργειας & Κτίρια"),
+    "esco":       ("📋", "ESCO / EPC / Χρηματοδοτικά Μοντέλα"),
+    "solar_th":   ("☀️",  "Ηλιοθερμικά & Βιομηχανική Θερμότητα"),
+    "chp":        ("⚡", "Συμπαραγωγή (CHP / Τριπαραγωγή)"),
+    "industrial": ("🏭", "Βιομηχανική Ενεργειακή Αποδοτικότητα"),
+    "funding":    ("💶", "ΕΣΠΑ & EU Funding"),
+    "heatpump":   ("🌡️",  "Αντλίες Θερμότητας"),
+    "pv":         ("🌞", "Φωτοβολταϊκά"),
+    "bess":       ("🔋", "Αποθήκευση Ενέργειας"),
+    "wind":       ("💨", "Αιολική Ενέργεια"),
+    "gas":        ("⛽", "Φυσικό Αέριο & LNG"),
+    "policy":     ("🏛️",  "Πολιτική & Ρύθμιση"),
+    "other":      ("📰", "Γενικά Ενεργειακά"),
+}
+
+# Section header colours (hex) for HTML report
+_TOPIC_COLOUR: Dict[str, str] = {
+    "efficiency": "#1a7a4a",
+    "esco":       "#1a6a3a",
+    "solar_th":   "#c67000",
+    "chp":        "#5a3e9e",
+    "industrial": "#2d6a9f",
+    "funding":    "#c0392b",
+    "heatpump":   "#b84a00",
+    "pv":         "#e07b00",
+    "bess":       "#1a5276",
+    "wind":       "#117a65",
+    "gas":        "#6c3483",
+    "policy":     "#1f618d",
+    "other":      "#555555",
+    "top":        "#e94560",
+}
+
+
+# ══════════════════════════════════════════════════════════════
+#  ARTICLE DATACLASS
+# ══════════════════════════════════════════════════════════════
+@dataclass
+class Article:
+    title: str
+    link: str
+    site: str
+    score: int = 0
+    published_dt: Optional[datetime.datetime] = None
+    topic: str = "other"
+
+
+# ══════════════════════════════════════════════════════════════
+#  FILTER / SCORE / TOPIC HELPERS
+# ══════════════════════════════════════════════════════════════
 def is_energy_title(title: str) -> bool:
     t = normalize(title)
     if any(n in t for n in NEGATIVE):
         return False
     return any(k in t for k in KEYWORDS)
 
+
 def score_title(title: str) -> int:
     t = normalize(title)
-    score = 0
+    sc = 0
     for group, words in GROUPS.items():
         if any(w in t for w in words):
-            score += WEIGHTS.get(group, 1)
+            sc += WEIGHTS.get(group, 1)
     if any(w in t for w in ["ενεργεια", "ηλεκτρ"]):
-        score += 1
-    return score
+        sc += 1
+    return sc
 
-def dominant_group(title: str) -> str:
-    """Return the highest-weighted group that matches the title."""
+
+def assign_topic(title: str) -> str:
     t = normalize(title)
-    best_group, best_weight = "", 0
-    for group, words in GROUPS.items():
-        if any(w in t for w in words):
-            w = WEIGHTS.get(group, 1)
-            if w > best_weight:
-                best_group, best_weight = group, w
-    return best_group
+    for key in TOPIC_PRIORITY:
+        if any(w in t for w in GROUPS.get(key, [])):
+            return key
+    return "other"
 
-def theme_index(title: str) -> int:
-    """Return index into THEMES for this title (last bucket = catch-all)."""
-    g = dominant_group(title)
-    for i, (_, groups) in enumerate(THEMES):
-        if g in groups:
-            return i
-    return len(THEMES) - 1
 
-# ══════════════════════════════════════════════════════════════════
+def _is_article_text(text: str) -> bool:
+    t = normalize(text)
+    if len(t) < 8:
+        return False
+    bad = ["read more", "περισσοτερα", "share", "mailto:", "javascript:"]
+    return not any(b in t for b in bad)
+
+
+def _short_site(url: str) -> str:
+    try:
+        return urlparse(url).netloc.replace("www.", "")
+    except Exception:
+        return url
+
+
+# ══════════════════════════════════════════════════════════════
 #  HTTP / SCRAPING
-# ══════════════════════════════════════════════════════════════════
-HEADERS = {
+# ══════════════════════════════════════════════════════════════
+_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -361,6 +417,7 @@ except Exception:
     _BS_PARSER = "html.parser"
 
 _SESSION: Optional[requests.Session] = None
+
 
 def _get_session() -> requests.Session:
     global _SESSION
@@ -378,52 +435,38 @@ def _get_session() -> requests.Session:
         _SESSION = s
     return _SESSION
 
-def _absolutize(base: str, href: str) -> str:
-    try:
-        return urljoin(base, href)
-    except Exception:
-        return href
-
-def _is_useful_text(text: str) -> bool:
-    t = normalize(text)
-    if len(t) < 8:
-        return False
-    bad = ["read more", "περισσοτερα", "share", "mailto:", "javascript:"]
-    return not any(b in t for b in bad)
 
 def scrape_site(url: str) -> List[Tuple[str, str]]:
-    """Return de-duplicated (title, link) list from a single site."""
-    if url in SKIP_SITES:
-        return []
+    """Return (title, absolute_link) pairs scraped from url."""
+    results: List[Tuple[str, str]] = []
     try:
-        r = _get_session().get(url, headers=HEADERS, timeout=SITE_TIMEOUT)
+        r = _get_session().get(url, headers=_HEADERS, timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, _BS_PARSER)
-        seen:    set                    = set()
-        results: List[Tuple[str, str]] = []
+        seen: set = set()
         for a in soup.find_all("a", href=True):
             title = a.get_text(strip=True)
             href  = a["href"]
             if not title or not href:
                 continue
-            if not _is_useful_text(title):
+            if not _is_article_text(title):
                 continue
-            link = _absolutize(url, href)
+            link = urljoin(url, href)
             if link.startswith("#"):
                 continue
-            key = (normalize(title), normalize(link))
+            key = (normalize(title)[:80], normalize(link)[:130])
             if key in seen:
                 continue
             seen.add(key)
             results.append((title, link))
-        return results
-    except Exception as e:
-        print(f"[WARN] {url}: {e}", file=sys.stderr)
-        return []
+    except Exception as exc:
+        print(f"[WARN] {url}: {exc}", file=sys.stderr)
+    return results
 
-# ══════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════
 #  DATE EXTRACTION
-# ══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 def _try_parse_dt(value: str) -> Optional[datetime.datetime]:
     if not value:
         return None
@@ -437,368 +480,314 @@ def _try_parse_dt(value: str) -> Optional[datetime.datetime]:
     except Exception:
         return None
 
+
 def _extract_dt_from_html(html: str) -> Optional[datetime.datetime]:
     soup = BeautifulSoup(html, _BS_PARSER)
     candidates: List[str] = []
+
     for attr in ("property", "name"):
         for key in ("article:published_time", "og:updated_time", "pubdate",
                     "publishdate", "timestamp", "dc.date", "date"):
             tag = soup.find("meta", {attr: key})
             if tag and tag.get("content"):
                 candidates.append(tag["content"])
-    for time_tag in soup.find_all("time"):
-        v = time_tag.get("datetime") or time_tag.get_text(strip=True)
+
+    for t in soup.find_all("time"):
+        v = t.get("datetime") or t.get_text(strip=True)
         if v:
             candidates.append(v)
+
     for script in soup.find_all("script", {"type": "application/ld+json"}):
         try:
             data = json.loads(script.string or "")
-            objs = data if isinstance(data, list) else [data]
-            for obj in objs:
+            for obj in (data if isinstance(data, list) else [data]):
                 if isinstance(obj, dict):
-                    for key in ("datePublished", "dateCreated", "dateModified"):
-                        if obj.get(key):
-                            candidates.append(obj[key])
+                    for k in ("datePublished", "dateCreated",
+                              "dateModified", "uploadDate"):
+                        if obj.get(k):
+                            candidates.append(obj[k])
         except Exception:
             pass
+
     for raw in candidates:
         dt = _try_parse_dt(raw)
         if dt:
             return dt
     return None
 
-def _fetch_article_dt(url: str) -> Optional[datetime.datetime]:
+
+def fetch_article_dt(url: str) -> Optional[datetime.datetime]:
     try:
-        r = _get_session().get(url, headers=HEADERS, timeout=DATE_TIMEOUT)
+        r = _get_session().get(url, headers=_HEADERS, timeout=10)
         r.raise_for_status()
         return _extract_dt_from_html(r.text)
     except Exception:
         return None
 
-# ══════════════════════════════════════════════════════════════════
-#  CROSS-SITE DEDUPLICATION  (Jaccard on normalised title tokens)
-# ══════════════════════════════════════════════════════════════════
-_STOP: frozenset = frozenset({
-    "η", "ο", "τα", "το", "της", "στη", "στο", "για", "και", "με",
-    "που", "στα", "του", "των", "εν", "the", "a", "an", "of", "in",
-    "to", "for", "on", "at", "by", "is", "are", "as",
-})
 
-def _tokens(title: str) -> frozenset:
-    return frozenset(normalize(title).split()) - _STOP
-
-def _jaccard(a: frozenset, b: frozenset) -> float:
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
-
-def dedup_cross_site(
-    articles: List[Tuple[str, str, str]]
-) -> List[Tuple[str, str, str]]:
-    """
-    Collapse near-duplicate titles (Jaccard ≥ 0.65) across sites,
-    keeping the highest-scored version.
-    Input/output: [(title, link, site), ...]
-    """
-    result: List[Tuple[str, str, str]] = []
-    tsets:  List[frozenset]            = []
-    for title, link, site in articles:
-        tset  = _tokens(title)
-        score = score_title(title)
-        merged = False
-        for i, existing in enumerate(tsets):
-            if _jaccard(tset, existing) >= 0.65:
-                if score > score_title(result[i][0]):
-                    result[i] = (title, link, site)
-                    tsets[i]  = tset
-                merged = True
-                break
-        if not merged:
-            result.append((title, link, site))
-            tsets.append(tset)
-    return result
-
-# ══════════════════════════════════════════════════════════════════
-#  ARTICLE TYPE ALIAS
-# ══════════════════════════════════════════════════════════════════
-# (title, link, site, published_dt)
-Article = Tuple[str, str, str, Optional[datetime.datetime]]
-
-# ══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 #  MAIN PIPELINE
-# ══════════════════════════════════════════════════════════════════
-def collect_and_enrich() -> List[Article]:
+# ══════════════════════════════════════════════════════════════
+def collect_all_articles() -> List[Article]:
     """
-    1. Scrape all sites.
-    2. Filter for energy relevance.
-    3. Cross-site dedup.
-    4. Parallel date enrichment for top MAX_DATE_FETCH by score.
-    5. Age filter.
-    6. Final sort (date desc, then score desc).
+    1. Scrape all sites
+    2. Keyword filter + global cross-site deduplication
+    3. Score + assign topic
+    4. Enrich top MAX_DT_FETCHES articles with exact publish date
+    5. Drop articles where date is known and older than MAX_AGE_DAYS
+    6. Final sort: date desc, score desc
     """
-    # Step 1–2: Scrape + filter
-    raw: List[Tuple[str, str, str]] = []
+    raw: List[Tuple[str, str, str]] = []  # (title, link, site)
+
     for site in SITES:
-        print(f"[INFO] Scraping {site} …", flush=True)
+        print(f"[INFO] Scraping {site} …", file=sys.stderr)
         for title, link in scrape_site(site):
-            if is_energy_title(title):
-                raw.append((title, link, site))
-        time.sleep(0.3)   # politeness
+            raw.append((title, link, site))
+        time.sleep(SCRAPE_DELAY)
 
-    # Step 3: Cross-site dedup
-    raw = dedup_cross_site(raw)
-    print(f"[INFO] After dedup: {len(raw)} unique articles", flush=True)
+    # Filter + global dedup ──────────────────────────────────────────
+    seen_links:  set = set()
+    seen_titles: set = set()
+    articles: List[Article] = []
 
-    # Step 4: Sort by score, then parallel date enrichment
-    raw.sort(key=lambda x: score_title(x[0]), reverse=True)
-    top  = raw[:MAX_DATE_FETCH]
-    rest = raw[MAX_DATE_FETCH:]
+    for title, link, site in raw:
+        if not is_energy_title(title):
+            continue
+        nl = normalize(link)[:140]
+        nt = normalize(title)[:100]
+        if nl in seen_links or nt in seen_titles:
+            continue
+        seen_links.add(nl)
+        seen_titles.add(nt)
+        articles.append(Article(
+            title=title, link=link, site=site,
+            score=score_title(title),
+            topic=assign_topic(title),
+        ))
 
-    enriched: List[Article] = []
+    # Date enrichment (top articles by score first) ──────────────────
+    articles.sort(key=lambda a: a.score, reverse=True)
+    for i, art in enumerate(articles):
+        if i >= MAX_DT_FETCHES:
+            break
+        art.published_dt = fetch_article_dt(art.link)
 
-    def _enrich(item: Tuple[str, str, str]) -> Article:
-        title, link, site = item
-        return (title, link, site, _fetch_article_dt(link))
+    # Age filter — keep: (no date known) OR (date within MAX_AGE_DAYS) ─
+    now    = datetime.datetime.now(tz=ATHENS_TZ)
+    cutoff = now - datetime.timedelta(days=MAX_AGE_DAYS)
+    articles = [
+        a for a in articles
+        if a.published_dt is None or a.published_dt >= cutoff
+    ]
 
-    with ThreadPoolExecutor(max_workers=DATE_WORKERS) as ex:
-        future_to_item = {ex.submit(_enrich, item): item for item in top}
-        for fut in as_completed(future_to_item):
-            orig = future_to_item[fut]
-            try:
-                enriched.append(fut.result())
-            except Exception:
-                enriched.append((orig[0], orig[1], orig[2], None))
-
-    enriched += [(t, l, s, None) for t, l, s in rest]
-
-    # Step 5: Age filter — drop articles with a known date older than MAX_AGE_DAYS
-    if MAX_AGE_DAYS > 0:
-        cutoff = datetime.datetime.now(tz=ATHENS_TZ) - datetime.timedelta(days=MAX_AGE_DAYS)
-        enriched = [
-            a for a in enriched
-            if a[3] is None or a[3] >= cutoff    # keep unknown dates
-        ]
-
-    # Step 6: Sort — dated articles first (newest), then undated by score
+    # Final sort ─────────────────────────────────────────────────────
     def _sort_key(a: Article) -> Tuple:
-        dt    = a[3] or datetime.datetime.min.replace(tzinfo=ZoneInfo("UTC"))
-        score = score_title(a[0])
-        return (dt, score)
+        dt = a.published_dt or datetime.datetime.min.replace(
+            tzinfo=ZoneInfo("UTC")
+        )
+        return (dt, a.score)
 
-    enriched.sort(key=_sort_key, reverse=True)
-    return enriched
+    articles.sort(key=_sort_key, reverse=True)
+    return articles
 
-# ══════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════
 #  REPORT BUILDERS
-# ══════════════════════════════════════════════════════════════════
-def _fmt_dt(dt: Optional[datetime.datetime]) -> str:
+# ══════════════════════════════════════════════════════════════
+def _fmt(dt: Optional[datetime.datetime]) -> str:
     return dt.strftime("%d/%m %H:%M") if dt else "—"
 
-def _short_site(site: str) -> str:
-    return (site.replace("https://www.", "")
-               .replace("https://", "")
-               .split("/")[0])
 
-def _grouped(articles: List[Article]) -> List[List[Article]]:
-    """Split articles into len(THEMES) buckets based on dominant group."""
-    buckets: List[List[Article]] = [[] for _ in THEMES]
-    for a in articles:
-        buckets[theme_index(a[0])].append(a)
-    return buckets
-
-# ── Plain text ─────────────────────────────────────────────────────
 def build_text_report(articles: List[Article]) -> str:
-    now = datetime.datetime.now(tz=ATHENS_TZ).strftime("%d/%m/%Y %H:%M")
-    lines = [f"🔋 DAILY ENERGY NEWS — {now} (Europe/Athens)", ""]
+    today = datetime.datetime.now(tz=ATHENS_TZ).strftime("%d/%m/%Y %H:%M")
+    lines = [f"🔋 DAILY ENERGY NEWS — {today} (EET/EEST)", ""]
 
-    lines += [
-        "═" * 62,
-        f"🔝  TOP {MAX_TOP} HIGHLIGHTS",
-        "═" * 62,
-    ]
-    for a in articles[:MAX_TOP]:
-        title, link, site, dt = a
-        lines.append(f"  [{score_title(title):2d}] [{_fmt_dt(dt)}]  {title}")
-        lines.append(f"        {link}")
+    lines += ["═" * 56, f"🏆  TOP {TOP_N} HEADLINES", "═" * 56, ""]
+    for a in articles[:TOP_N]:
+        lines.append(f"• [{_fmt(a.published_dt)}] (s:{a.score}) {a.title}")
+        lines.append(f"  {a.link}  [{_short_site(a.site)}]")
         lines.append("")
 
-    buckets = _grouped(articles)
-    for (theme_name, _), bucket in zip(THEMES, buckets):
-        if not bucket:
+    buckets: Dict[str, List[Article]] = {}
+    for a in articles:
+        buckets.setdefault(a.topic, []).append(a)
+
+    for key in TOPIC_PRIORITY + ["other"]:
+        items = buckets.get(key)
+        if not items:
             continue
-        lines += ["─" * 62, theme_name, "─" * 62]
-        for title, link, site, dt in bucket:
-            src = _short_site(site)
-            lines.append(f"  [{score_title(title):2d}] [{_fmt_dt(dt)}]  {title}  «{src}»")
-            lines.append(f"        {link}")
-        lines.append("")
-
+        emoji, label = TOPIC_META.get(key, ("📰", key))
+        lines += ["─" * 56, f"{emoji}  {label.upper()}", "─" * 56, ""]
+        for a in items:
+            lines.append(f"• [{_fmt(a.published_dt)}] (s:{a.score}) {a.title}")
+            lines.append(f"  {a.link}  [{_short_site(a.site)}]")
+            lines.append("")
     return "\n".join(lines)
 
-# ── HTML ───────────────────────────────────────────────────────────
-def build_html_report(articles: List[Article]) -> str:
-    now = datetime.datetime.now(tz=ATHENS_TZ).strftime("%d/%m/%Y %H:%M")
 
-    css = """
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-           color: #1a1a1a; background: #f0f2f5; padding: 20px; }
-    .card { background: #fff; border-radius: 10px; padding: 20px;
-            margin-bottom: 16px; box-shadow: 0 1px 5px rgba(0,0,0,.07); }
-    h1    { font-size: 22px; color: #0d47a1; }
-    .meta { color: #777; font-size: 12px; margin-top: 4px; }
-    h2    { font-size: 14px; font-weight: 700; color: #333; margin-bottom: 12px;
-            border-bottom: 2px solid #e3e8f0; padding-bottom: 6px; }
-    .item { margin: 7px 0; display: flex; align-items: baseline;
-            gap: 6px; flex-wrap: wrap; }
-    .score { min-width: 26px; border-radius: 4px; padding: 2px 6px;
-             font-size: 11px; font-weight: 700; text-align: center;
-             flex-shrink: 0; background: #e8f0fe; color: #1565c0; }
-    .score.hi { background: #1565c0; color: #fff; }
-    a   { color: #0d47a1; text-decoration: none; font-size: 13px; }
-    a:hover { text-decoration: underline; }
-    .dt  { color: #bbb; font-size: 11px; white-space: nowrap; }
-    .src { color: #ccc; font-size: 10px; }
+def build_html_report(articles: List[Article]) -> str:
+    today = datetime.datetime.now(tz=ATHENS_TZ).strftime("%d/%m/%Y %H:%M")
+
+    style = """
+* { box-sizing: border-box; }
+body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+       color: #1a1a2e; background: #f4f5f7; margin: 0; padding: 16px; }
+.wrap { max-width: 860px; margin: 0 auto; }
+h1   { font-size: 22px; margin: 0 0 4px; color: #0f3460; }
+.ts  { color: #888; font-size: 12px; margin-bottom: 20px; }
+.sec { background: #fff; border-radius: 8px; margin-bottom: 14px;
+       box-shadow: 0 1px 3px rgba(0,0,0,.08); overflow: hidden; }
+.shdr { padding: 9px 14px; font-weight: 700; font-size: 13px; color: #fff; }
+.item { padding: 8px 14px; border-bottom: 1px solid #f0f0f0;
+        display: flex; align-items: flex-start; gap: 8px; }
+.item:last-child { border-bottom: none; }
+.sc { min-width: 26px; text-align: center; background: #eef; color: #336;
+      border: 1px solid #ccd; border-radius: 4px;
+      padding: 1px 4px; font-size: 11px; flex-shrink: 0; }
+.ib { flex: 1; min-width: 0; }
+a { color: #0366d6; text-decoration: none; font-size: 13px; line-height: 1.4; }
+a:hover { text-decoration: underline; }
+.meta { color: #999; font-size: 11px; margin-top: 2px; }
     """
 
-    def badge(score: int) -> str:
-        cls = "score hi" if score >= 8 else "score"
-        return f'<span class="{cls}">{score}</span>'
-
-    def item_html(a: Article) -> str:
-        title, link, site, dt = a
-        s   = score_title(title)
-        src = _short_site(site)
+    def _section(topic_key: str, items: List[Article]) -> str:
+        if not items:
+            return ""
+        colour = _TOPIC_COLOUR.get(topic_key, "#555")
+        if topic_key == "top":
+            emoji, label = "🏆", f"Top {TOP_N} Headlines"
+        else:
+            emoji, label = TOPIC_META.get(topic_key, ("📰", topic_key))
+        rows = "".join(
+            f"<div class='item'>"
+            f"<span class='sc'>{a.score}</span>"
+            f"<div class='ib'>"
+            f"<a href='{a.link}' target='_blank' rel='noopener noreferrer'>"
+            f"{a.title}</a>"
+            f"<div class='meta'>{_fmt(a.published_dt)} · {_short_site(a.site)}</div>"
+            f"</div></div>"
+            for a in items
+        )
         return (
-            f'<div class="item">{badge(s)}'
-            f'<a href="{link}" target="_blank" rel="noopener noreferrer">{title}</a>'
-            f'<span class="dt">{_fmt_dt(dt)}</span>'
-            f'<span class="src">{src}</span></div>'
+            f"<div class='sec'>"
+            f"<div class='shdr' style='background:{colour}'>"
+            f"{emoji} {label}</div>"
+            f"{rows}</div>"
         )
 
+    buckets: Dict[str, List[Article]] = {}
+    for a in articles:
+        buckets.setdefault(a.topic, []).append(a)
+
     parts = [
-        '<div class="card">',
-        '  <h1>🔋 DAILY ENERGY NEWS</h1>',
-        f'  <p class="meta">Europe/Athens &middot; {now} &middot; {len(articles)} articles</p>',
-        '</div>',
+        "<div class='wrap'>",
+        "<h1>🔋 Daily Energy News — Enerwave</h1>",
+        f"<div class='ts'>Europe/Athens — {today} · {len(articles)} articles</div>",
+        _section("top", articles[:TOP_N]),
     ]
-
-    # Top Highlights
-    parts += ['<div class="card">', f'<h2>🔝 Top {MAX_TOP} Highlights</h2>']
-    for a in articles[:MAX_TOP]:
-        parts.append(item_html(a))
-    parts.append('</div>')
-
-    # Thematic sections
-    for (theme_name, _), bucket in zip(THEMES, _grouped(articles)):
-        if not bucket:
-            continue
-        parts += ['<div class="card">', f'<h2>{theme_name}</h2>']
-        for a in bucket:
-            parts.append(item_html(a))
-        parts.append('</div>')
+    for key in TOPIC_PRIORITY + ["other"]:
+        parts.append(_section(key, buckets.get(key, [])))
+    parts.append("</div>")
 
     return (
         "<!doctype html><html>"
         "<head><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<style>{css}</style></head>"
+        "<meta name='viewport' content='width=device-width'>"
+        f"<style>{style}</style>"
+        "</head>"
         f"<body>{''.join(parts)}</body></html>"
     )
 
-# ══════════════════════════════════════════════════════════════════
-#  EMAIL
-# ══════════════════════════════════════════════════════════════════
-def send_email_html(subject: str, body_text: str, body_html: str) -> None:
-    EMAIL_USERNAME  = os.getenv("EMAIL_USERNAME")
-    EMAIL_PASSWORD  = os.getenv("EMAIL_PASSWORD")
-    EMAIL_RECIPIENT = os.getenv("EMAIL_RECIPIENT")
-    EMAIL_CC        = os.getenv("EMAIL_CC",  "").strip()
-    EMAIL_BCC       = os.getenv("EMAIL_BCC", "").strip()
-    SMTP_SERVER     = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-    SMTP_PORT       = int(os.getenv("SMTP_PORT", "587"))
 
-    if not (EMAIL_USERNAME and EMAIL_PASSWORD and EMAIL_RECIPIENT):
+# ══════════════════════════════════════════════════════════════
+#  EMAIL
+# ══════════════════════════════════════════════════════════════
+def send_email(subject: str, body_text: str, body_html: str) -> None:
+    EU   = os.getenv("EMAIL_USERNAME")
+    EP   = os.getenv("EMAIL_PASSWORD")
+    ER   = os.getenv("EMAIL_RECIPIENT")
+    CC   = os.getenv("EMAIL_CC",  "").strip()
+    BCC  = os.getenv("EMAIL_BCC", "").strip()
+    HOST = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+    PORT = int(os.getenv("SMTP_PORT", "587"))
+
+    if not EU or not EP or not ER:
         raise RuntimeError(
             "Missing env vars: EMAIL_USERNAME / EMAIL_PASSWORD / EMAIL_RECIPIENT"
         )
 
-    to_list   = [x.strip() for x in EMAIL_RECIPIENT.split(",") if x.strip()]
-    cc_list   = [x.strip() for x in EMAIL_CC.split(",")        if x.strip()]
-    bcc_list  = [x.strip() for x in EMAIL_BCC.split(",")       if x.strip()]
-    all_rcpts = to_list + cc_list + bcc_list
-    if not all_rcpts:
-        raise RuntimeError("EMAIL_RECIPIENT is empty.")
+    to_list  = [x.strip() for x in ER.split(",")  if x.strip()]
+    cc_list  = [x.strip() for x in CC.split(",")  if x.strip()]
+    bcc_list = [x.strip() for x in BCC.split(",") if x.strip()]
+    all_rcpt = to_list + cc_list + bcc_list
 
     msg = MIMEMultipart("alternative")
     try:
-        local, domain = EMAIL_USERNAME.split("@", 1)
-        msg["From"] = str(Address(display_name="Daily Energy News | Enerwave",
-                                  username=local, domain=domain))
+        local, domain = EU.split("@", 1)
+        msg["From"] = str(Address("Daily Energy News Agent", local, domain))
     except Exception:
-        msg["From"] = EMAIL_USERNAME
-
+        msg["From"] = EU
     msg["To"]         = ", ".join(to_list)
     if cc_list:
         msg["Cc"]     = ", ".join(cc_list)
     msg["Subject"]    = subject
     msg["Date"]       = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()
-
     msg.attach(MIMEText(body_text, "plain", "utf-8"))
     msg.attach(MIMEText(body_html, "html",  "utf-8"))
 
-    attempts = [
-        ("STARTTLS", SMTP_SERVER, SMTP_PORT),
-        ("SSL",      SMTP_SERVER, 465),
-    ]
-    last_exc = None
-    for mode, host, port in attempts:
+    for mode, host, port in [("STARTTLS", HOST, PORT), ("SSL", HOST, 465)]:
         for _ in range(2):
-            server = None
+            srv = None
+            last_exc: Optional[Exception] = None
             try:
                 if mode == "STARTTLS":
-                    server = smtplib.SMTP(host, port, timeout=20)
-                    server.ehlo(); server.starttls(); server.ehlo()
+                    srv = smtplib.SMTP(host, port, timeout=20)
+                    srv.ehlo(); srv.starttls(); srv.ehlo()
                 else:
-                    server = smtplib.SMTP_SSL(host, port, timeout=20)
-                server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
-                server.sendmail(EMAIL_USERNAME, all_rcpts, msg.as_string())
+                    srv = smtplib.SMTP_SSL(host, port, timeout=20)
+                srv.login(EU, EP)
+                srv.sendmail(EU, all_rcpt, msg.as_string())
                 return
-            except Exception as e:
-                last_exc = e
+            except Exception as exc:
+                last_exc = exc
                 time.sleep(2)
             finally:
                 try:
-                    if server:
-                        server.quit()
+                    if srv:
+                        srv.quit()
                 except Exception:
                     pass
-    raise RuntimeError(f"Email failed after all retries: {last_exc}")
+    raise RuntimeError(f"Email send failed after all retries: {last_exc}")
 
-# ══════════════════════════════════════════════════════════════════
-#  MAIN
-# ══════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════
+#  ENTRY POINT
+# ══════════════════════════════════════════════════════════════
 def main() -> None:
-    articles = collect_and_enrich()
-    print(f"[INFO] Final article count: {len(articles)}", flush=True)
+    articles = collect_all_articles()
+    total    = len(articles)
+    print(f"[INFO] {total} articles after filter, dedup & age check.",
+          file=sys.stderr)
 
-    if not articles:
-        if os.getenv("SEND_EMPTY", "false").lower() == "true":
-            msg = "No energy news found today."
-            send_email_html("Daily Energy News — No results", msg, f"<p>{msg}</p>")
-        else:
-            print("[INFO] No articles — skipping email (set SEND_EMPTY=true to override).")
+    SEND_EMPTY = os.getenv("SEND_EMPTY", "false").lower() == "true"
+    if not articles and not SEND_EMPTY:
+        print("ℹ️  No articles found — email not sent "
+              "(set SEND_EMPTY=true to force).")
         return
 
     today   = datetime.datetime.now(tz=ATHENS_TZ).strftime("%d/%m/%Y")
-    subject = f"Energy News | Enerwave | {today} | {len(articles)} articles"
+    subject = f"⚡ Energy News {today} — {total} articles (Enerwave)"
 
     try:
-        send_email_html(subject, build_text_report(articles), build_html_report(articles))
-        print("📨 Email sent successfully!", flush=True)
-    except Exception as e:
-        print(f"❌ Email failed: {e}", file=sys.stderr)
+        send_email(
+            subject,
+            build_text_report(articles),
+            build_html_report(articles),
+        )
+        print("📨  HTML email sent successfully.")
+    except Exception as exc:
+        print(f"❌  Email failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
