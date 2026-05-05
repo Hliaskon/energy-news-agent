@@ -1,0 +1,45 @@
+name: Weekly Energy Digest
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"   # Every Monday 08:00 UTC = 10:00 EET / 11:00 EEST
+  workflow_dispatch:       # Manual trigger from GitHub UI
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system XML libs (faster lxml)
+        run: sudo apt-get install -y python3-lxml
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install Python requirements
+        run: pip install -r requirements.txt
+
+      - name: Run weekly digest
+        env:
+          EMAIL_USERNAME:  ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD:  ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          EMAIL_CC:        ${{ secrets.EMAIL_CC }}
+          EMAIL_BCC:       ${{ secrets.EMAIL_BCC }}
+          SMTP_SERVER:     ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT:       ${{ secrets.SMTP_PORT }}
+          SEND_EMPTY:      ${{ secrets.SEND_EMPTY }}
+        run: python weekly_digest.py
