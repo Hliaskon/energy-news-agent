@@ -38,7 +38,15 @@ GR_SITES: List[str] = [
     # Regulatory / Gov
     "https://ypen.gov.gr/category/anakoinoseis/",
     "https://www.admie.gr/en/news",
-    "https://www.raae.gr/anakoinoseis/",
+    "https://www.raaey.gr/energeia/anakoinoseis/",
+    # NOTE: was "raae.gr" — outdated domain. The regulator was renamed
+    # ΡΑΕ → ΡΑΑΕΥ in March 2023; raaey.gr is the current site (verified
+    # 26/08/2026). Correcting this may surface regulator news that was
+    # silently never coming through before.
+    # EE-specific building/renovation portal — verified active with current
+    # (Aug 2026) content, wasn't previously covered. Directly on-topic for
+    # your core "ενεργειακή αναβάθμιση κτιρίων" focus.
+    "https://news.b2green.gr/",
     # EE programs
     "https://exoikonomo2025.gov.gr/",
     "https://www.ot.gr/category/green/eksoikonomisi/",

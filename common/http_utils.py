@@ -4,6 +4,7 @@ Shared HTTP session, page scraper, and article date extractor.
 """
 
 import json
+import re
 import sys
 import time
 from typing import List, Optional, Tuple
@@ -63,12 +64,23 @@ def short_site(url: str) -> str:
         return url
 
 
+_LEADING_TIME_RE = re.compile(r"^\d{1,2}:\d{2}\s*")
+
+
 def _is_usable_link_text(text: str) -> bool:
     t = text.lower()
     if len(t) < 8:
         return False
     bad = ["read more", "περισσοτερα", "share", "mailto:", "javascript:"]
-    return not any(b in t for b in bad)
+    if any(b in t for b in bad):
+        return False
+    # A bare category tag (e.g. "Εξοικονόμηση") is a single word and reads
+    # as a real energy headline to the keyword filter, but it's a nav/badge
+    # link, not an article. Confirmed in a real run: it passed through with
+    # no actual news content. Require at least 2 words.
+    if len(text.split()) < 2:
+        return False
+    return True
 
 
 def scrape_site(
@@ -91,6 +103,11 @@ def scrape_site(
             # from teaser text, not the actual title, and looked like noise.
             heading = a.find(["h1", "h2", "h3", "h4"])
             title = heading.get_text(strip=True) if heading else a.get_text(strip=True)
+            # Some cards (e.g. capital.gr) prepend a "12:00"-style clock
+            # badge inside the same heading, producing duplicate-looking
+            # entries like "12:00Το φυσικό αέριο..." next to the same
+            # article without the prefix from another source. Strip it.
+            title = _LEADING_TIME_RE.sub("", title)
             href  = a["href"]
             if not title or not href:
                 continue
@@ -117,7 +134,14 @@ def _try_parse_dt(value: str) -> Optional[datetime.datetime]:
     if not value:
         return None
     try:
-        dt = dateparser.parse(value)
+        # dayfirst=True: without this, dateutil defaults to the US MM/DD
+        # convention for ambiguous dates. Greek/EU sites write DD/MM, so
+        # e.g. "08/10" (10 Αυγούστου) was being read as "October 8th" — a
+        # date in the future relative to the report, which slips straight
+        # through the >= cutoff age filter no matter how old the article
+        # actually is. Confirmed via a real digest run (26/08/2026) where a
+        # worldenergynews.gr article showed as dated "08/10".
+        dt = dateparser.parse(value, dayfirst=True)
         if not dt:
             return None
         if not dt.tzinfo:
