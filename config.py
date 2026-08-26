@@ -205,23 +205,26 @@ GROUPS: Dict[str, List[str]] = {
     # review after the first couple of runs for false-positive hits.
     "competitors": [
         "dimkat", "enerca", "malamoulis", "malko", "mgd", "novenergy",
-        "big solar", "pv maint", "redex", "sunel", "greenvolt",
+        "big solar", "pv maint", "redex", "sunel", "greenvolt", "k&m",
         "αεναος", "βαρνας ετε", "βιεντερ", "εν.τε", "εναυσις",
         "ηλιατορας", "κρατωρ", "κχκ solar", "σπυροπουλος αε",
     ],
 }
-# Caveats on the competitors list (flag for review, not auto-fixed):
-#  - "K&m" from the sheet was excluded: 2 letters + ampersand is too short/
-#    ambiguous to match safely (near-certain false positives). If this is a
-#    real competitor, give me a longer distinguishing phrase (e.g. full legal
-#    name) and I'll add it.
-#  - "NRG(Big Solar)" was mapped to "big solar" only — the bare "NRG" token
-#    was dropped for the same short/ambiguous reason (matches unrelated
-#    "NRG Energy" US-market headlines, etc.).
-#  - "with GreenVolt" in the sheet reads like a partial comment, not a company
-#    name — mapped to "greenvolt"; confirm this is correct.
+# Caveats on the competitors list:
+#  - "K&m" is now included, confirmed by user. Originally excluded for
+#    being short/ambiguous, but the keyword matcher was rewritten this same
+#    session to boundary-aware regex (see common/text_utils.py — the "ems"/
+#    "bas" substring bug fix), which means "k&m" can no longer match inside
+#    an unrelated longer word the way a plain substring check could. Risk
+#    is materially lower than when first flagged — still worth a glance at
+#    the first few runs, since "&" as a token boundary is less common and
+#    less tested than alphanumeric boundaries.
+#  - "NRG(Big Solar)" → mapped to "big solar" only, bare "NRG" dropped
+#    (too short/ambiguous). Confirmed correct by user.
+#  - "with GreenVolt" → mapped to "greenvolt". Confirmed correct by user.
 #  - "ΕΝ.ΤΕ" contains a period that normalize() won't treat specially; "εν.τε"
-#    as a substring is fairly safe but double-check after first run.
+#    as a substring is fairly safe but keep an eye on it after the first run.
+# All caveats above reviewed and confirmed by user on 26/08/2026.
 
 # Flat list of all keywords for fast pre-filter
 ALL_KEYWORDS: List[str] = list({kw for kws in GROUPS.values() for kw in kws}) + [
