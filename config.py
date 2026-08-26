@@ -91,18 +91,21 @@ FUNDING_SITES: List[str] = [
 #  SCORING WEIGHTS  (Enerwave-specific)
 # ══════════════════════════════════════════════════════════════
 WEIGHTS: Dict[str, int] = {
-    "esco":       5,
-    "solar_th":   5,
-    "funding":    5,
-    "efficiency": 5,
-    "chp":        4,
-    "industrial": 4,
-    "policy":     4,
-    "heatpump":   3,
-    "bess":       3,
-    "gas":        3,
-    "pv":         2,
-    "wind":       2,
+    "competitors":      7,  # highest — you always want to see competitor moves
+    "esco":             5,
+    "solar_th":         5,
+    "funding":          5,
+    "efficiency":       5,
+    "pv":               5,  # raised from 2 — explicit priority per user request
+    "bess":             5,  # raised from 3 — explicit priority per user request
+    "ppa":              5,  # new
+    "demand_response":  5,  # new
+    "chp":              4,
+    "industrial":       4,
+    "policy":           4,
+    "heatpump":         3,
+    "gas":              3,
+    "wind":             2,
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -126,7 +129,13 @@ GROUPS: Dict[str, List[str]] = {
         "horizon europe", "ευρωπαϊκα ταμεια",
         "ανταγωνιστικοτητα 2021", "αλλαζω συστημα θερμανσης",
         "εξοικονομω 2025", "εσπα ενεργεια", "cinea",
-        "χρηματοδοτηση", "επιδοτηση", "προγραμμα", "δραση",
+        # NOTE: removed bare "χρηματοδοτηση", "επιδοτηση", "προγραμμα", "δραση" —
+        # these generic words were matching non-energy articles (bonds, corporate
+        # financing, unrelated EU programmes) any time they mentioned funding.
+        # Kept only as compound phrases below, which require energy context.
+        "χρηματοδοτηση φωτοβολταϊκων", "χρηματοδοτηση εργων ενεργειακης",
+        "επιδοτηση αντλιας θερμοτητας", "επιδοτηση φωτοβολταϊκων",
+        "προγραμμα εξοικονομω", "δραση εξοικονομω",
     ],
     "efficiency": [
         "εξοικονομηση", "ενεργειακη αναβαθμιση", "εξοικονομω",
@@ -174,7 +183,37 @@ GROUPS: Dict[str, List[str]] = {
         "φυσικο αεριο", "gas", "lng", "fsru",
         "αγωγος", "pipeline", "eastmed",
     ],
+    "ppa": [
+        "ppa", "power purchase agreement", "corporate ppa", "cppa",
+        "συμβαση αγορας ενεργειας", "διμερης συμβαση ενεργειας",
+    ],
+    "demand_response": [
+        "demand response", "διαχειριση ζητησης", "αποκριση ζητησης",
+        "load shifting", "load shedding", "flexibility market",
+        "αγορα ευελιξιας", "aggregator", "συσσωρευτης φορτιου",
+    ],
+    # Sourced from Competition_Info.xlsx, column D ("COMPETITOR"), 25/08/2026.
+    # NOTE: a few names are short/generic tokens (see caveats below the dict) —
+    # review after the first couple of runs for false-positive hits.
+    "competitors": [
+        "dimkat", "enerca", "malamoulis", "malko", "mgd", "novenergy",
+        "big solar", "pv maint", "redex", "sunel", "greenvolt",
+        "αεναος", "βαρνας ετε", "βιεντερ", "εν.τε", "εναυσις",
+        "ηλιατορας", "κρατωρ", "κχκ solar", "σπυροπουλος αε",
+    ],
 }
+# Caveats on the competitors list (flag for review, not auto-fixed):
+#  - "K&m" from the sheet was excluded: 2 letters + ampersand is too short/
+#    ambiguous to match safely (near-certain false positives). If this is a
+#    real competitor, give me a longer distinguishing phrase (e.g. full legal
+#    name) and I'll add it.
+#  - "NRG(Big Solar)" was mapped to "big solar" only — the bare "NRG" token
+#    was dropped for the same short/ambiguous reason (matches unrelated
+#    "NRG Energy" US-market headlines, etc.).
+#  - "with GreenVolt" in the sheet reads like a partial comment, not a company
+#    name — mapped to "greenvolt"; confirm this is correct.
+#  - "ΕΝ.ΤΕ" contains a period that normalize() won't treat specially; "εν.τε"
+#    as a substring is fairly safe but double-check after first run.
 
 # Flat list of all keywords for fast pre-filter
 ALL_KEYWORDS: List[str] = list({kw for kws in GROUPS.values() for kw in kws}) + [
@@ -189,47 +228,61 @@ NEGATIVE_KEYWORDS: List[str] = [
     "αθλη", "πολιτισ", "ψυχαγωγ", "μαγειρ", "συνταγ", "μοδα",
     "καιρος", "υγεια", "πανδημ", "κορονο", "τουρισ",
     "sports", "entertainment", "ποδοσφαιρ", "κινηματογραφ",
+    # added after 17/08–25/08/2026 digest review — generic finance/pop-culture
+    # noise that was slipping in via broad "funding" keywords or blob titles
+    "bitcoin", "κρυπτονομισμ", "crypto", "ταινια", "σκηνοθετ",
+    "ομολογ", "netflix", "spotify", "nba", "cruise", "recipe",
 ]
 
-# Topic display order (most Enerwave-relevant first)
+# Topic display order (most Enerwave-relevant first).
+# Reordered 25/08/2026 per explicit priority: competitors always first,
+# then EE / PV / BESS / PPA / demand response, then the existing ESCO /
+# solar-thermal / industrial core, then the rest.
 TOPIC_PRIORITY: List[str] = [
-    "esco", "solar_th", "chp", "industrial",
-    "efficiency", "funding", "heatpump",
-    "pv", "bess", "wind", "gas", "policy",
+    "competitors", "efficiency", "pv", "bess",
+    "ppa", "demand_response",
+    "esco", "solar_th", "industrial", "chp",
+    "funding", "heatpump", "policy", "wind", "gas",
 ]
 
 # Emoji + label per topic
 TOPIC_META: Dict[str, Tuple[str, str]] = {
-    "efficiency": ("🏢", "Εξοικονόμηση Ενέργειας & Κτίρια"),
-    "esco":       ("📋", "ESCO / EPC / Χρηματοδοτικά Μοντέλα"),
-    "solar_th":   ("☀️",  "Ηλιοθερμικά & Βιομηχανική Θερμότητα"),
-    "chp":        ("⚡", "Συμπαραγωγή (CHP / Τριπαραγωγή)"),
-    "industrial": ("🏭", "Βιομηχανική Ενεργειακή Αποδοτικότητα"),
-    "funding":    ("💶", "ΕΣΠΑ & EU Funding"),
-    "heatpump":   ("🌡️",  "Αντλίες Θερμότητας"),
-    "pv":         ("🌞", "Φωτοβολταϊκά"),
-    "bess":       ("🔋", "Αποθήκευση Ενέργειας"),
-    "wind":       ("💨", "Αιολική Ενέργεια"),
-    "gas":        ("⛽", "Φυσικό Αέριο & LNG"),
-    "policy":     ("🏛️",  "Πολιτική & Ρύθμιση"),
-    "other":      ("📰", "Γενικά Ενεργειακά"),
+    "competitors":      ("🎯", "Ανταγωνιστές"),
+    "efficiency":       ("🏢", "Εξοικονόμηση Ενέργειας & Κτίρια"),
+    "esco":             ("📋", "ESCO / EPC / Χρηματοδοτικά Μοντέλα"),
+    "solar_th":         ("☀️",  "Ηλιοθερμικά & Βιομηχανική Θερμότητα"),
+    "chp":              ("⚡", "Συμπαραγωγή (CHP / Τριπαραγωγή)"),
+    "industrial":       ("🏭", "Βιομηχανική Ενεργειακή Αποδοτικότητα"),
+    "funding":          ("💶", "ΕΣΠΑ & EU Funding"),
+    "heatpump":         ("🌡️",  "Αντλίες Θερμότητας"),
+    "pv":               ("🌞", "Φωτοβολταϊκά"),
+    "bess":             ("🔋", "Αποθήκευση Ενέργειας"),
+    "ppa":              ("📄", "PPA"),
+    "demand_response":  ("📉", "Demand Response"),
+    "wind":             ("💨", "Αιολική Ενέργεια"),
+    "gas":              ("⛽", "Φυσικό Αέριο & LNG"),
+    "policy":           ("🏛️",  "Πολιτική & Ρύθμιση"),
+    "other":            ("📰", "Γενικά Ενεργειακά"),
 }
 
 TOPIC_COLOUR: Dict[str, str] = {
-    "efficiency": "#1a7a4a",
-    "esco":       "#0d5c35",
-    "solar_th":   "#c67000",
-    "chp":        "#5a3e9e",
-    "industrial": "#2d6a9f",
-    "funding":    "#c0392b",
-    "heatpump":   "#b84a00",
-    "pv":         "#e07b00",
-    "bess":       "#1a5276",
-    "wind":       "#117a65",
-    "gas":        "#6c3483",
-    "policy":     "#1f618d",
-    "other":      "#555555",
-    "top":        "#0f3460",
+    "competitors":      "#8e0038",
+    "efficiency":       "#1a7a4a",
+    "esco":             "#0d5c35",
+    "solar_th":         "#c67000",
+    "chp":              "#5a3e9e",
+    "industrial":       "#2d6a9f",
+    "funding":          "#c0392b",
+    "heatpump":         "#b84a00",
+    "pv":               "#e07b00",
+    "bess":             "#1a5276",
+    "ppa":              "#4a4a8a",
+    "demand_response":  "#8a5a00",
+    "wind":             "#117a65",
+    "gas":              "#6c3483",
+    "policy":           "#1f618d",
+    "other":            "#555555",
+    "top":              "#0f3460",
 }
 
 # ══════════════════════════════════════════════════════════════

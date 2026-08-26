@@ -19,13 +19,24 @@ from config import (
     GR_SITES, INTL_SITES,
     TOPIC_PRIORITY, TOPIC_META, TOPIC_COLOUR,
 )
-from common.http_utils import scrape_site, fetch_article_dt, short_site, ATHENS_TZ
-from common.text_utils import normalize, is_energy_title, score_title, assign_topic, Article
+from common.http_utils import (
+    scrape_site, fetch_article_dt_and_snippet, short_site, ATHENS_TZ,
+)
+from common.text_utils import (
+    normalize, is_energy_title, score_title, assign_topic,
+    count_keyword_hits, Article,
+)
 from common.email_utils import send_email
 
 MIN_SCORE     = 3
 MAX_AGE_DAYS  = 7
-MAX_DT_FETCH  = 35
+# Was 35 — with 400+ raw articles/week, only the top-35-by-score ever got a
+# published_dt fetched; everything else had published_dt=None, which the old
+# age filter treated as "pass". That's why 2013–2021 iea-shc.org articles were
+# showing up in a "last 7 days" digest. Raised so the tighter keyword/negative
+# filters below can realistically be checked against a real date for (almost)
+# every surviving candidate. Adjust down only if this measurably slows the run.
+MAX_DT_FETCH  = 250
 TOP_N         = 10
 
 # International sites: apply a stricter filter — only topics Enerwave cares about
@@ -75,20 +86,59 @@ def collect() -> List[Article]:
             score=sc, topic=topic,
         ))
 
-    # Enrich with dates
+    # Enrich with date + snippet (single GET per article — same request used
+    # to already do date-fetching, now also pulls a short body excerpt).
     articles.sort(key=lambda a: a.score, reverse=True)
     for i, art in enumerate(articles):
         if i >= MAX_DT_FETCH:
             break
-        art.published_dt = fetch_article_dt(art.link)
+        art.published_dt, art.snippet = fetch_article_dt_and_snippet(art.link)
 
-    # Age filter
+    # Age filter — FIXED: an article with no fetchable date is no longer
+    # given a free pass. Previously "published_dt is None" counted as
+    # in-range, which is how years-old static pages (e.g. iea-shc.org
+    # evergreen listings) ended up in a "last 7 days" digest.
     now    = datetime.datetime.now(tz=ATHENS_TZ)
     cutoff = now - datetime.timedelta(days=MAX_AGE_DAYS)
+    undated = sum(1 for a in articles if a.published_dt is None)
+    if undated:
+        print(f"[INFO] Dropping {undated} articles with no fetchable date.",
+              file=sys.stderr)
     articles = [
         a for a in articles
-        if a.published_dt is None or a.published_dt >= cutoff
+        if a.published_dt is not None and a.published_dt >= cutoff
     ]
+
+    # ── Zero-cost PR-fluff corroboration (no LLM) ──────────────────────
+    # Problem this targets: titles that trip exactly ONE keyword almost
+    # incidentally — e.g. "LG Electronics ενισχύει τις ακαδημίες HVAC" is a
+    # vendor service-network press release, not an EE/HVAC project story,
+    # but it still matches "hvac". Real energy-relevant articles about a
+    # narrow topic almost always reinforce it elsewhere in the body (more
+    # specific terms, numbers, related concepts). A one-off name-drop
+    # usually doesn't. Rule: if the TITLE alone only cleared 1 keyword hit,
+    # require at least 1 more hit in the fetched body snippet before
+    # keeping the article; titles with 2+ hits are trusted as-is.
+    # LIMITATION (flagging honestly): this can also drop a genuinely
+    # relevant article that covers one narrow topic in depth without ever
+    # repeating a second matching term in its meta description — i.e. this
+    # trades some false negatives for fewer false positives. If you notice
+    # real stories disappearing, tell me and I'll loosen the threshold.
+    kept: List[Article] = []
+    corroboration_dropped = 0
+    for a in articles:
+        title_hits = count_keyword_hits(a.title)
+        if title_hits >= 2:
+            kept.append(a)
+            continue
+        if a.snippet and count_keyword_hits(a.snippet) >= 1:
+            kept.append(a)
+        else:
+            corroboration_dropped += 1
+    if corroboration_dropped:
+        print(f"[INFO] Dropping {corroboration_dropped} single-mention "
+              f"articles with no body corroboration.", file=sys.stderr)
+    articles = kept
 
     articles.sort(
         key=lambda a: (

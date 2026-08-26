@@ -1,9 +1,12 @@
 name: Greek Market Alert
 
 on:
-  schedule:
-    - cron: "30 7 * * 2"   # Tuesday  07:30 UTC = 09:30 EET / 10:30 EEST
-    - cron: "30 7 * * 5"   # Friday   07:30 UTC = 09:30 EET / 10:30 EEST
+  # Schedule disabled 25/08/2026 — consolidated into weekly_digest.py only,
+  # per decision to run a single weekly report instead of digest + separate
+  # GR alert. Script kept for optional manual runs (workflow_dispatch).
+  # schedule:
+  #   - cron: "30 7 * * 2"   # Tuesday  07:30 UTC = 09:30 EET / 10:30 EEST
+  #   - cron: "30 7 * * 5"   # Friday   07:30 UTC = 09:30 EET / 10:30 EEST
   workflow_dispatch:
 
 jobs:

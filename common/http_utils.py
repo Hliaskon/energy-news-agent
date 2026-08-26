@@ -83,11 +83,22 @@ def scrape_site(
         soup = BeautifulSoup(r.text, _BS_PARSER)
         seen: set = set()
         for a in soup.find_all("a", href=True):
-            title = a.get_text(strip=True)
+            # Prefer a heading element inside the anchor over the anchor's
+            # full text. On several GR sites (e.g. ot.gr) the whole article
+            # card — category tag + date + headline + teaser + byline — is
+            # wrapped in a single <a>, so a.get_text() returns a long blob
+            # instead of just the headline. That blob then matched keywords
+            # from teaser text, not the actual title, and looked like noise.
+            heading = a.find(["h1", "h2", "h3", "h4"])
+            title = heading.get_text(strip=True) if heading else a.get_text(strip=True)
             href  = a["href"]
             if not title or not href:
                 continue
             if not _is_usable_link_text(title):
+                continue
+            if len(title) > 220:
+                # Still a blob (no heading tag found) — skip rather than
+                # let a multi-headline concatenation through keyword scoring.
                 continue
             link = urljoin(url, href)
             if link.startswith("#"):
@@ -149,6 +160,44 @@ def extract_dt_from_html(html: str) -> Optional[datetime.datetime]:
         if dt:
             return dt
     return None
+
+
+def extract_snippet_from_html(html: str, max_chars: int = 700) -> str:
+    """
+    Best-effort short excerpt of the article body, used only as a zero-cost
+    relevance corroboration signal (see collect() in weekly_digest.py) — NOT
+    for display. Prefers meta description / og:description (cheap, already
+    summarised by the publisher); falls back to the first couple of <p> tags.
+    """
+    soup = BeautifulSoup(html, _BS_PARSER)
+
+    for attr in ("property", "name"):
+        for key in ("og:description", "description", "twitter:description"):
+            tag = soup.find("meta", {attr: key})
+            if tag and tag.get("content"):
+                return tag["content"][:max_chars]
+
+    paras = soup.find_all("p")
+    text = " ".join(p.get_text(" ", strip=True) for p in paras[:4])
+    return text[:max_chars]
+
+
+def fetch_article_dt_and_snippet(
+    url: str, timeout: int = 10,
+) -> Tuple[Optional[datetime.datetime], str]:
+    """
+    Single GET that returns both the published date and a short body
+    snippet — reuses the same HTTP response instead of fetching the page
+    twice (once for date, once for relevance corroboration).
+    """
+    try:
+        r = get_session().get(url, headers=_HEADERS, timeout=timeout)
+        r.raise_for_status()
+        dt = extract_dt_from_html(r.text)
+        snippet = extract_snippet_from_html(r.text)
+        return dt, snippet
+    except Exception:
+        return None, ""
 
 
 def fetch_article_dt(url: str, timeout: int = 10) -> Optional[datetime.datetime]:
